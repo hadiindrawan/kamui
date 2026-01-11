@@ -1,0 +1,11 @@
+.env
+
+node_modules
+yarn-error.log
+
+*.md    
+!README.md
+
+scripts/
+dist/
+public/ffmpeg
