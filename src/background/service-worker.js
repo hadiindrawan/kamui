@@ -39,20 +39,27 @@ async function handleStartRecording(message, sender, sendResponse) {
         // Create offscreen document for recording
         await createOffscreenDocument();
 
-        // Update state
-        recordingState = {
-            isRecording: true,
-            currentSessionId: sessionId,
-            tabId: tab.id
-        };
+        // Create offscreen document for recording
+        await createOffscreenDocument();
 
         // Start recording in offscreen document
-        await chrome.runtime.sendMessage({
+        const response = await chrome.runtime.sendMessage({
             type: 'OFFSCREEN_START_RECORDING',
             sessionId: sessionId,
             tabId: tab.id,
             micEnabled: message.micEnabled || false
         });
+
+        if (!response || !response.success) {
+            throw new Error(response?.error || 'Failed to start recording');
+        }
+
+        // Update state only after successful start
+        recordingState = {
+            isRecording: true,
+            currentSessionId: sessionId,
+            tabId: tab.id
+        };
 
         // Inject content script if not already injected
         try {
@@ -73,6 +80,12 @@ async function handleStartRecording(message, sender, sendResponse) {
         sendResponse({ success: true, sessionId });
     } catch (error) {
         console.error('Error starting recording:', error);
+        // Reset state on failure
+        recordingState = {
+            isRecording: false,
+            currentSessionId: null,
+            tabId: null
+        };
         sendResponse({ success: false, error: error.message });
     }
 }

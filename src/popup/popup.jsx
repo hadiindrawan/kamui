@@ -26,7 +26,16 @@ function Popup() {
         loadRecordings();
         checkRecordingState();
         loadMicSetting();
-    }, []);
+
+        const handleKeyDown = (e) => {
+            if (e.key === 'Enter' && !isRecording) {
+                handleStartRecording();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isRecording, micEnabled]);
 
     async function checkRecordingState() {
         try {

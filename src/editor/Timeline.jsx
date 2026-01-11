@@ -265,167 +265,179 @@ export default function Timeline({
                 </div>
             </div>
 
-            {/* Time Ruler */}
-            <div className="time-ruler">
-                <div className="segments-track" style={{ gap: '8px' }}>
-                    <div className="track-label" style={{ opacity: 0 }}>
-                        <ZoomIn size={14} />
-                    </div>
-                    <div className="ruler-track" ref={rulerTrackRef} onClick={handleTimelineClick} style={{ flex: 1 }}>
-                        {/* Time markers */}
-                        {timeMarkers.map((time) => (
-                            <div
-                                key={time}
-                                className="time-marker"
-                                style={{ left: `${getPositionPercent(time)}%` }}
-                            >
-                                <div className="marker-line" />
-                                <span className="marker-label">{formatTime(time)}</span>
+            {/* Scrollable Timeline Area */}
+            <div className="timeline-scroll-area" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+                <div
+                    className="tracks-wrapper"
+                    style={{
+                        width: `${timelineZoom * 100}%`,
+                        minWidth: '100%',
+                        position: 'relative' // Ensure absolute children are relative to this
+                    }}
+                >
+                    {/* Time Ruler */}
+                    <div className="time-ruler">
+                        <div className="segments-track" style={{ gap: '8px' }}>
+                            <div className="track-label" style={{ opacity: 0 }}>
+                                <ZoomIn size={14} />
                             </div>
-                        ))}
+                            <div className="ruler-track" ref={rulerTrackRef} onClick={handleTimelineClick} style={{ flex: 1 }}>
+                                {/* Time markers */}
+                                {timeMarkers.map((time) => (
+                                    <div
+                                        key={time}
+                                        className="time-marker"
+                                        style={{ left: `${getPositionPercent(time)}%` }}
+                                    >
+                                        <div className="marker-line" />
+                                        <span className="marker-label">{formatTime(time)}</span>
+                                    </div>
+                                ))}
 
-                        {/* Auto-zoom indicators */}
-                        {segments.filter(s => s.type === 'zoom').map((segment) => (
-                            <div
-                                key={`indicator-${segment.id}`}
-                                className="zoom-indicator"
-                                style={{
-                                    left: `${getPositionPercent(segment.startTime / 1000)}%`,
-                                    width: `${Math.max((segment.duration / 1000 / duration) * 100, 0.5)}%`
-                                }}
-                                title={`Auto-zoom at ${formatTime(segment.startTime / 1000)}`}
-                            />
-                        ))}
+                                {/* Auto-zoom indicators */}
+                                {segments.filter(s => s.type === 'zoom').map((segment) => (
+                                    <div
+                                        key={`indicator-${segment.id}`}
+                                        className="zoom-indicator"
+                                        style={{
+                                            left: `${getPositionPercent(segment.startTime / 1000)}%`,
+                                            width: `${Math.max((segment.duration / 1000 / duration) * 100, 0.5)}%`
+                                        }}
+                                        title={`Auto-zoom at ${formatTime(segment.startTime / 1000)}`}
+                                    />
+                                ))}
 
-                        {/* Trim regions */}
-                        {trimStart > 0 && (
-                            <div
-                                className="trim-region trim-start"
-                                style={{ width: `${getPositionPercent(trimStart)}%` }}
-                            />
-                        )}
-                        {actualTrimEnd < duration && (
-                            <div
-                                className="trim-region trim-end"
-                                style={{
-                                    left: `${getPositionPercent(actualTrimEnd)}%`,
-                                    width: `${getPositionPercent(duration - actualTrimEnd)}%`
-                                }}
-                            />
-                        )}
+                                {/* Trim regions */}
+                                {trimStart > 0 && (
+                                    <div
+                                        className="trim-region trim-start"
+                                        style={{ width: `${getPositionPercent(trimStart)}%` }}
+                                    />
+                                )}
+                                {actualTrimEnd < duration && (
+                                    <div
+                                        className="trim-region trim-end"
+                                        style={{
+                                            left: `${getPositionPercent(actualTrimEnd)}%`,
+                                            width: `${getPositionPercent(duration - actualTrimEnd)}%`
+                                        }}
+                                    />
+                                )}
 
-                        {/* Trim handles */}
-                        {isTrimMode && (
-                            <>
+                                {/* Trim handles */}
+                                {isTrimMode && (
+                                    <>
+                                        <div
+                                            className="trim-handle start"
+                                            style={{ left: `${getPositionPercent(trimStart)}%` }}
+                                            onMouseDown={(e) => handleTrimMouseDown(e, 'start')}
+                                        />
+                                        <div
+                                            className="trim-handle end"
+                                            style={{ left: `${getPositionPercent(actualTrimEnd)}%` }}
+                                            onMouseDown={(e) => handleTrimMouseDown(e, 'end')}
+                                        />
+                                    </>
+                                )}
+
+                                {/* Playhead */}
                                 <div
-                                    className="trim-handle start"
-                                    style={{ left: `${getPositionPercent(trimStart)}%` }}
-                                    onMouseDown={(e) => handleTrimMouseDown(e, 'start')}
-                                />
-                                <div
-                                    className="trim-handle end"
-                                    style={{ left: `${getPositionPercent(actualTrimEnd)}%` }}
-                                    onMouseDown={(e) => handleTrimMouseDown(e, 'end')}
-                                />
-                            </>
-                        )}
-
-                        {/* Playhead */}
-                        <div
-                            className="playhead"
-                            style={{
-                                left: `${getPositionPercent(currentTime)}%`,
-                                display: duration > 0 ? 'block' : 'none'
-                            }}
-                        >
-                            <div className="playhead-head" />
-                            <div className="playhead-line" />
+                                    className="playhead"
+                                    style={{
+                                        left: `${getPositionPercent(currentTime)}%`,
+                                        display: duration > 0 ? 'block' : 'none'
+                                    }}
+                                >
+                                    <div className="playhead-head" />
+                                    <div className="playhead-line" />
+                                </div>
+                            </div>
+                            <div className="track-label" style={{ opacity: 0 }}>
+                                <Scissors size={14} />
+                            </div>
                         </div>
                     </div>
-                    <div className="track-label" style={{ opacity: 0 }}>
-                        <Scissors size={14} />
+
+                    {/* Segments Track */}
+                    <div className="segments-track">
+                        <div className="track-label">
+                            <ZoomIn size={14} />
+                        </div>
+                        <div className="track-content" ref={segmentsTrackRef}>
+                            {segments.length > 0 && segments.map((segment) => {
+                                const leftPercent = getPositionPercent(segment.startTime / 1000);
+                                const widthPercent = (segment.duration / 1000 / duration) * 100;
+                                const trackWidth = segmentsTrackRef.current?.getBoundingClientRect().width || 1000;
+
+                                const minWidthPx = Math.max(2, (0.2 / duration) * trackWidth); // Minimum 0.2s visible or 2px
+
+                                return (
+                                    <Rnd
+                                        key={segment.id}
+                                        position={{
+                                            x: (leftPercent / 100) * trackWidth,
+                                            y: 4
+                                        }}
+                                        size={{
+                                            width: Math.max((widthPercent / 100) * trackWidth, minWidthPx),
+                                            height: 32
+                                        }}
+                                        onDragStop={(e, d) => {
+                                            const newLeftPercent = (d.x / trackWidth) * 100;
+                                            const newTime = (newLeftPercent / 100) * duration * 1000;
+                                            onUpdateSegment(segment.id, { startTime: Math.max(0, newTime) }, true);
+                                        }}
+                                        onResizeStop={(e, direction, ref, delta, position) => {
+                                            const newWidth = parseInt(ref.style.width);
+                                            const newLeftPercent = (position.x / trackWidth) * 100;
+                                            const widthPercent = (newWidth / trackWidth) * 100;
+
+                                            const updates = {};
+                                            if (direction.includes('left')) {
+                                                const newTime = (newLeftPercent / 100) * duration * 1000;
+                                                const oldEndTime = segment.startTime + segment.duration;
+                                                updates.startTime = Math.max(0, newTime);
+                                                updates.duration = oldEndTime - updates.startTime;
+                                            } else if (direction.includes('right')) {
+                                                updates.duration = (widthPercent / 100) * duration * 1000;
+                                            }
+
+                                            onUpdateSegment(segment.id, updates, true);
+                                        }}
+                                        bounds="parent"
+                                        enableResizing={{
+                                            left: true,
+                                            right: true,
+                                            top: false,
+                                            bottom: false
+                                        }}
+                                        resizeHandleStyles={{
+                                            left: { width: '8px', cursor: 'ew-resize' },
+                                            right: { width: '8px', cursor: 'ew-resize' }
+                                        }}
+                                        dragAxis="x"
+                                        className={`segment-rnd segment-${segment.type || 'zoom'} ${selectedSegmentId === segment.id ? 'segment-selected' : ''
+                                            }`}
+                                        onClick={() => onSelectSegment && onSelectSegment(segment.id)}
+                                    >
+                                        <div className="segment-content">
+                                            {segment.type === 'crop' ? <Crop size={12} /> : <ZoomIn size={12} />}
+                                            <span>
+                                                {segment.type === 'crop' ? 'Crop' :
+                                                    segment.type === 'typing' ? 'Type' :
+                                                        segment.type === 'selection' ? 'Select' :
+                                                            segment.type === 'dblclick' ? 'DblClick' :
+                                                                segment.type === 'click' ? 'Click' : 'Zoom'}
+                                            </span>
+                                        </div>
+                                    </Rnd>
+                                );
+                            })}
+                        </div>
+                        <div className="track-label">
+                            <Scissors size={14} />
+                        </div>
                     </div>
-                </div>
-            </div>
-
-            {/* Segments Track */}
-            <div className="segments-track">
-                <div className="track-label">
-                    <ZoomIn size={14} />
-                </div>
-                <div className="track-content" ref={segmentsTrackRef}>
-                    {segments.length > 0 && segments.map((segment) => {
-                        const leftPercent = getPositionPercent(segment.startTime / 1000);
-                        const widthPercent = (segment.duration / 1000 / duration) * 100;
-                        const trackWidth = segmentsTrackRef.current?.getBoundingClientRect().width || 1000;
-
-                        const minWidthPx = Math.max(2, (0.2 / duration) * trackWidth); // Minimum 0.2s visible or 2px
-
-                        return (
-                            <Rnd
-                                key={segment.id}
-                                position={{
-                                    x: (leftPercent / 100) * trackWidth,
-                                    y: 4
-                                }}
-                                size={{
-                                    width: Math.max((widthPercent / 100) * trackWidth, minWidthPx),
-                                    height: 32
-                                }}
-                                onDragStop={(e, d) => {
-                                    const newLeftPercent = (d.x / trackWidth) * 100;
-                                    const newTime = (newLeftPercent / 100) * duration * 1000;
-                                    onUpdateSegment(segment.id, { startTime: Math.max(0, newTime) }, true);
-                                }}
-                                onResizeStop={(e, direction, ref, delta, position) => {
-                                    const newWidth = parseInt(ref.style.width);
-                                    const newLeftPercent = (position.x / trackWidth) * 100;
-                                    const widthPercent = (newWidth / trackWidth) * 100;
-
-                                    const updates = {};
-                                    if (direction.includes('left')) {
-                                        const newTime = (newLeftPercent / 100) * duration * 1000;
-                                        const oldEndTime = segment.startTime + segment.duration;
-                                        updates.startTime = Math.max(0, newTime);
-                                        updates.duration = oldEndTime - updates.startTime;
-                                    } else if (direction.includes('right')) {
-                                        updates.duration = (widthPercent / 100) * duration * 1000;
-                                    }
-
-                                    onUpdateSegment(segment.id, updates, true);
-                                }}
-                                bounds="parent"
-                                enableResizing={{
-                                    left: true,
-                                    right: true,
-                                    top: false,
-                                    bottom: false
-                                }}
-                                resizeHandleStyles={{
-                                    left: { width: '8px', cursor: 'ew-resize' },
-                                    right: { width: '8px', cursor: 'ew-resize' }
-                                }}
-                                dragAxis="x"
-                                className={`segment-rnd segment-${segment.type || 'zoom'} ${selectedSegmentId === segment.id ? 'segment-selected' : ''
-                                    }`}
-                                onClick={() => onSelectSegment && onSelectSegment(segment.id)}
-                            >
-                                <div className="segment-content">
-                                    {segment.type === 'crop' ? <Crop size={12} /> : <ZoomIn size={12} />}
-                                    <span>
-                                        {segment.type === 'crop' ? 'Crop' :
-                                            segment.type === 'typing' ? 'Type' :
-                                                segment.type === 'selection' ? 'Select' :
-                                                    segment.type === 'dblclick' ? 'DblClick' :
-                                                        segment.type === 'click' ? 'Click' : 'Zoom'}
-                                    </span>
-                                </div>
-                            </Rnd>
-                        );
-                    })}
-                </div>
-                <div className="track-label">
-                    <Scissors size={14} />
                 </div>
             </div>
         </div>
