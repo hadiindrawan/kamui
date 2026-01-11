@@ -1,4 +1,4 @@
-# Cursorful Clone - Quick Start Guide
+# Beunta - Quick Start Guide
 
 ## 🚀 Load Extension in Chrome
 

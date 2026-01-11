@@ -234,7 +234,7 @@ export async function exportVideoMP4(recording, settings, onProgress) {
                     console.log('[Export] MP4 conversion complete!');
 
                     // Download MP4
-                    downloadBlob(mp4Blob, `cursorful_${Date.now()}.mp4`);
+                    downloadBlob(mp4Blob, `beunta_${Date.now()}.mp4`);
 
                     // Show success message
                     setTimeout(() => {
@@ -261,7 +261,7 @@ export async function exportVideoMP4(recording, settings, onProgress) {
             // Fallback: Download as WebM
             onProgress(100);
             console.log('[Export] Downloading as WebM');
-            downloadBlob(webmBlob, `cursorful_${Date.now()}.webm`);
+            downloadBlob(webmBlob, `beunta_${Date.now()}.webm`);
 
             // Notify user about WebM export
             setTimeout(() => {

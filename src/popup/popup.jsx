@@ -9,7 +9,9 @@ import {
     Trash2,
     Clock,
     HardDrive,
-    Zap
+    Zap,
+    Mic,
+    MicOff
 } from 'lucide-react';
 import RecordingsList from './RecordingsList';
 import './popup.css';
@@ -18,10 +20,12 @@ function Popup() {
     const [isRecording, setIsRecording] = useState(false);
     const [recordings, setRecordings] = useState([]);
     const [currentSessionId, setCurrentSessionId] = useState(null);
+    const [micEnabled, setMicEnabled] = useState(false); // Default OFF
 
     useEffect(() => {
         loadRecordings();
         checkRecordingState();
+        loadMicSetting();
     }, []);
 
     async function checkRecordingState() {
@@ -46,9 +50,31 @@ function Popup() {
         }
     }
 
+    async function loadMicSetting() {
+        try {
+            const result = await chrome.storage.local.get(['micEnabled']);
+            setMicEnabled(result.micEnabled || false); // Default OFF
+        } catch (e) {
+            console.error('Error loading mic setting:', e);
+        }
+    }
+
+    async function toggleMicrophone() {
+        const newValue = !micEnabled;
+        setMicEnabled(newValue);
+        try {
+            await chrome.storage.local.set({ micEnabled: newValue });
+        } catch (e) {
+            console.error('Error saving mic setting:', e);
+        }
+    }
+
     async function handleStartRecording() {
         try {
-            const response = await chrome.runtime.sendMessage({ type: 'START_RECORDING' });
+            const response = await chrome.runtime.sendMessage({
+                type: 'START_RECORDING',
+                micEnabled: micEnabled
+            });
             if (response.success) {
                 setIsRecording(true);
                 setCurrentSessionId(response.sessionId);
@@ -100,7 +126,7 @@ function Popup() {
             <header className="header">
                 <div className="header-logo">
                     <Video size={24} />
-                    <h1>Cursorful</h1>
+                    <h1>Beunta</h1>
                 </div>
                 <p className="subtitle">Smart Screen Recorder</p>
             </header>
@@ -123,6 +149,19 @@ function Popup() {
                         </div>
                     </div>
                 )}
+
+                {/* Microphone Toggle */}
+                <div className="mic-toggle">
+                    <button
+                        className={`btn-toggle ${micEnabled ? 'active' : ''}`}
+                        onClick={toggleMicrophone}
+                        disabled={isRecording}
+                        title={micEnabled ? 'Microphone ON' : 'Microphone OFF'}
+                    >
+                        {micEnabled ? <Mic size={16} /> : <MicOff size={16} />}
+                        <span>{micEnabled ? 'Mic ON' : 'Mic OFF'}</span>
+                    </button>
+                </div>
             </div>
 
             <div className="recordings-section">

@@ -10,7 +10,7 @@ let mixedStream = null;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case 'OFFSCREEN_START_RECORDING':
-            startRecording(message.sessionId, message.tabId)
+            startRecording(message.sessionId, message.tabId, message.micEnabled)
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true;
@@ -37,53 +37,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-async function startRecording(sessionId, tabId) {
+async function startRecording(sessionId, tabId, micEnabled = false) {
     currentSessionId = sessionId;
     recordedChunks = [];
     eventLog = [];
 
     try {
-        // Get screen capture with audio
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        // 1. IMPROVED: Use stricter constraints for maximum resolution
+        const displayMediaOptions = {
             video: {
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-                frameRate: { ideal: 60 }
+                // Request 4K to ensure we get the max available source resolution
+                width: { ideal: 3840, max: 3840 },
+                height: { ideal: 2160, max: 2160 },
+                frameRate: { ideal: 60 },
+                // VITAL: Prevents Chrome from downscaling the image
+                resizeMode: "none"
             },
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                sampleRate: 44100
+                sampleRate: 48000 // Standard for video (vs 44.1k for music)
             }
-        });
+        };
 
-        // Get microphone
+        const displayStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+
+        // 2. IMPROVED: Set Content Hint
+        // "detail" prioritizes text sharpness (good for code/docs). 
+        // Use "motion" if recording games/video.
+        const videoTrack = displayStream.getVideoTracks()[0];
+        if ('contentHint' in videoTrack) {
+            videoTrack.contentHint = 'detail';
+        }
+
+        // Get microphone only if enabled
         let micStream = null;
-        try {
-            micStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 44100
-                }
-            });
-        } catch (e) {
-            console.warn('Microphone not available:', e);
+        if (micEnabled) {
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        sampleRate: 48000
+                    }
+                });
+                console.log('Microphone enabled and acquired');
+            } catch (e) {
+                console.warn('Microphone not available:', e);
+            }
+        } else {
+            console.log('Microphone disabled by user');
         }
 
         // Mix audio streams
         const finalStream = await mixAudioStreams(displayStream, micStream);
 
-        // Set up MediaRecorder
+        // 3. IMPROVED: Codec Selection & Bitrate
+        // We prioritize AV1 (best quality/size) > VP9 (great) > VP8 (fast)
+        const mimeTypes = [
+            'video/webm;codecs=av01.0.05M.08,opus', // AV1 (Ultra crisp)
+            'video/webm;codecs=vp9,opus',           // VP9 (Standard high qual)
+            'video/webm;codecs=vp8,opus'            // Fallback
+        ];
+
+        let selectedMimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type));
+
+        // Set up MediaRecorder with high quality settings
         const options = {
-            mimeType: 'video/webm;codecs=vp9,opus',
-            videoBitsPerSecond: 5000000 // 5 Mbps
+            mimeType: selectedMimeType || 'video/webm',
+            // 4. IMPROVED: Massive bitrate increase
+            // 50 Mbps ensures that when you zoom 300% on a generic button, it isn't blocky.
+            videoBitsPerSecond: 50 * 1000 * 1000
         };
 
-        // Fallback to VP8 if VP9 not supported
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options.mimeType = 'video/webm;codecs=vp8,opus';
-        }
+        console.log(`Starting Recorder with: ${options.mimeType} at 50Mbps`);
 
         mediaRecorder = new MediaRecorder(finalStream, options);
 
@@ -98,7 +125,7 @@ async function startRecording(sessionId, tabId) {
 
             // Clean up
             finalStream.getTracks().forEach(track => track.stop());
-            if (audioContext) {
+            if (audioContext && audioContext.state !== 'closed') {
                 audioContext.close();
                 audioContext = null;
             }
@@ -109,8 +136,10 @@ async function startRecording(sessionId, tabId) {
         };
 
         // Start recording
-        mediaRecorder.start(1000); // Collect data every second
+        // Slice every 500ms for safer memory management with high bitrate
+        mediaRecorder.start(500);
     } catch (error) {
+        console.error('Recording Start Failed:', error);
         throw error;
     }
 }
@@ -125,7 +154,7 @@ async function mixAudioStreams(displayStream, micStream) {
     }
 
     // Create audio context for mixing
-    audioContext = new AudioContext();
+    audioContext = new AudioContext({ sampleRate: 48000 });
     const destination = audioContext.createMediaStreamDestination();
 
     // Add display audio if available
@@ -133,16 +162,18 @@ async function mixAudioStreams(displayStream, micStream) {
         const displayAudioSource = audioContext.createMediaStreamSource(
             new MediaStream([audioTracks[0]])
         );
-        displayAudioSource.connect(destination);
+        const displayGain = audioContext.createGain();
+        displayGain.gain.value = 1.0; // Keep system audio clear
+        displayAudioSource.connect(displayGain).connect(destination);
     }
 
     // Add microphone audio if available
     if (micStream) {
         const micAudioSource = audioContext.createMediaStreamSource(micStream);
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 0.7; // Reduce mic volume slightly
-        micAudioSource.connect(gainNode);
-        gainNode.connect(destination);
+        const micGain = audioContext.createGain();
+        // Slightly boost mic to cut through system sound
+        micGain.gain.value = 1.2;
+        micAudioSource.connect(micGain).connect(destination);
     }
 
     // Combine video track with mixed audio

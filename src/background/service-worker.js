@@ -50,7 +50,8 @@ async function handleStartRecording(message, sender, sendResponse) {
         await chrome.runtime.sendMessage({
             type: 'OFFSCREEN_START_RECORDING',
             sessionId: sessionId,
-            tabId: tab.id
+            tabId: tab.id,
+            micEnabled: message.micEnabled || false
         });
 
         // Inject content script if not already injected

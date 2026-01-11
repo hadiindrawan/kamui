@@ -1,6 +1,6 @@
 import { openDB } from 'idb';
 
-const DB_NAME = 'CursorfulRecordings';
+const DB_NAME = 'BeuntaRecordings';
 const DB_VERSION = 1;
 const STORE_NAME = 'recordings';
 
