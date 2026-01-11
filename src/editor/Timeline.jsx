@@ -267,75 +267,83 @@ export default function Timeline({
 
             {/* Time Ruler */}
             <div className="time-ruler">
-                <div className="ruler-track" ref={rulerTrackRef} onClick={handleTimelineClick}>
-                    {/* Time markers */}
-                    {timeMarkers.map((time) => (
+                <div className="segments-track" style={{ gap: '8px' }}>
+                    <div className="track-label" style={{ opacity: 0 }}>
+                        <ZoomIn size={14} />
+                    </div>
+                    <div className="ruler-track" ref={rulerTrackRef} onClick={handleTimelineClick} style={{ flex: 1 }}>
+                        {/* Time markers */}
+                        {timeMarkers.map((time) => (
+                            <div
+                                key={time}
+                                className="time-marker"
+                                style={{ left: `${getPositionPercent(time)}%` }}
+                            >
+                                <div className="marker-line" />
+                                <span className="marker-label">{formatTime(time)}</span>
+                            </div>
+                        ))}
+
+                        {/* Auto-zoom indicators */}
+                        {segments.filter(s => s.type === 'zoom').map((segment) => (
+                            <div
+                                key={`indicator-${segment.id}`}
+                                className="zoom-indicator"
+                                style={{
+                                    left: `${getPositionPercent(segment.startTime / 1000)}%`,
+                                    width: `${Math.max((segment.duration / 1000 / duration) * 100, 0.5)}%`
+                                }}
+                                title={`Auto-zoom at ${formatTime(segment.startTime / 1000)}`}
+                            />
+                        ))}
+
+                        {/* Trim regions */}
+                        {trimStart > 0 && (
+                            <div
+                                className="trim-region trim-start"
+                                style={{ width: `${getPositionPercent(trimStart)}%` }}
+                            />
+                        )}
+                        {actualTrimEnd < duration && (
+                            <div
+                                className="trim-region trim-end"
+                                style={{
+                                    left: `${getPositionPercent(actualTrimEnd)}%`,
+                                    width: `${getPositionPercent(duration - actualTrimEnd)}%`
+                                }}
+                            />
+                        )}
+
+                        {/* Trim handles */}
+                        {isTrimMode && (
+                            <>
+                                <div
+                                    className="trim-handle start"
+                                    style={{ left: `${getPositionPercent(trimStart)}%` }}
+                                    onMouseDown={(e) => handleTrimMouseDown(e, 'start')}
+                                />
+                                <div
+                                    className="trim-handle end"
+                                    style={{ left: `${getPositionPercent(actualTrimEnd)}%` }}
+                                    onMouseDown={(e) => handleTrimMouseDown(e, 'end')}
+                                />
+                            </>
+                        )}
+
+                        {/* Playhead */}
                         <div
-                            key={time}
-                            className="time-marker"
-                            style={{ left: `${getPositionPercent(time)}%` }}
+                            className="playhead"
+                            style={{
+                                left: `${getPositionPercent(currentTime)}%`,
+                                display: duration > 0 ? 'block' : 'none'
+                            }}
                         >
-                            <div className="marker-line" />
-                            <span className="marker-label">{formatTime(time)}</span>
+                            <div className="playhead-head" />
+                            <div className="playhead-line" />
                         </div>
-                    ))}
-
-                    {/* Auto-zoom indicators */}
-                    {segments.filter(s => s.type === 'zoom').map((segment) => (
-                        <div
-                            key={`indicator-${segment.id}`}
-                            className="zoom-indicator"
-                            style={{
-                                left: `${getPositionPercent(segment.startTime / 1000)}%`,
-                                width: `${Math.max((segment.duration / 1000 / duration) * 100, 0.5)}%`
-                            }}
-                            title={`Auto-zoom at ${formatTime(segment.startTime / 1000)}`}
-                        />
-                    ))}
-
-                    {/* Trim regions */}
-                    {trimStart > 0 && (
-                        <div
-                            className="trim-region trim-start"
-                            style={{ width: `${getPositionPercent(trimStart)}%` }}
-                        />
-                    )}
-                    {actualTrimEnd < duration && (
-                        <div
-                            className="trim-region trim-end"
-                            style={{
-                                left: `${getPositionPercent(actualTrimEnd)}%`,
-                                width: `${getPositionPercent(duration - actualTrimEnd)}%`
-                            }}
-                        />
-                    )}
-
-                    {/* Trim handles */}
-                    {isTrimMode && (
-                        <>
-                            <div
-                                className="trim-handle start"
-                                style={{ left: `${getPositionPercent(trimStart)}%` }}
-                                onMouseDown={(e) => handleTrimMouseDown(e, 'start')}
-                            />
-                            <div
-                                className="trim-handle end"
-                                style={{ left: `${getPositionPercent(actualTrimEnd)}%` }}
-                                onMouseDown={(e) => handleTrimMouseDown(e, 'end')}
-                            />
-                        </>
-                    )}
-
-                    {/* Playhead */}
-                    <div
-                        className="playhead"
-                        style={{
-                            left: `${getPositionPercent(currentTime)}%`,
-                            display: duration > 0 ? 'block' : 'none'
-                        }}
-                    >
-                        <div className="playhead-head" />
-                        <div className="playhead-line" />
+                    </div>
+                    <div className="track-label" style={{ opacity: 0 }}>
+                        <Scissors size={14} />
                     </div>
                 </div>
             </div>
@@ -351,6 +359,8 @@ export default function Timeline({
                         const widthPercent = (segment.duration / 1000 / duration) * 100;
                         const trackWidth = segmentsTrackRef.current?.getBoundingClientRect().width || 1000;
 
+                        const minWidthPx = Math.max(2, (0.2 / duration) * trackWidth); // Minimum 0.2s visible or 2px
+
                         return (
                             <Rnd
                                 key={segment.id}
@@ -359,7 +369,7 @@ export default function Timeline({
                                     y: 4
                                 }}
                                 size={{
-                                    width: Math.max((widthPercent / 100) * trackWidth, 60),
+                                    width: Math.max((widthPercent / 100) * trackWidth, minWidthPx),
                                     height: 32
                                 }}
                                 onDragStop={(e, d) => {

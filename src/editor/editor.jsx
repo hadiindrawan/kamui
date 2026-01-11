@@ -78,52 +78,7 @@ function Editor() {
         }
     }, [history, historyIndex]);
 
-    // Keyboard shortcuts
-    useEffect(() => {
-        const handleKeyDown = (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-            switch (e.code) {
-                case 'Space':
-                    e.preventDefault();
-                    setIsPlaying(prev => !prev);
-                    break;
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    handleSkip(e.shiftKey ? -10 : -5);
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    handleSkip(e.shiftKey ? 10 : 5);
-                    break;
-                case 'KeyI':
-                    setTrimStart(currentTime);
-                    break;
-                case 'KeyO':
-                    setTrimEnd(currentTime);
-                    break;
-                case 'KeyZ':
-                    if (e.ctrlKey || e.metaKey) {
-                        e.preventDefault();
-                        if (e.shiftKey) {
-                            handleRedo();
-                        } else {
-                            handleUndo();
-                        }
-                    }
-                    break;
-                case 'KeyY':
-                    if (e.ctrlKey || e.metaKey) {
-                        e.preventDefault();
-                        handleRedo();
-                    }
-                    break;
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [currentTime, handleUndo, handleRedo]);
 
     useEffect(() => {
         loadRecording();
@@ -315,6 +270,8 @@ function Editor() {
         }
     }, [segments, selectedSegmentId, saveHistory]);
 
+
+
     const resetTimeline = useCallback(() => {
         const confirmed = window.confirm(
             'Reset timeline to original? This will restore all auto-detected zoom segments and remove manual edits.'
@@ -387,6 +344,67 @@ function Editor() {
         setCurrentTime(0);
         setTimeout(() => setCurrentTime(pos), 10);
     }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, playbackSpeed, aspectRatio, backgroundColor, trimStart, trimEnd]);
+
+    // Keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            switch (e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    setIsPlaying(prev => !prev);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    handleSkip(e.shiftKey ? -10 : -5);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    handleSkip(e.shiftKey ? 10 : 5);
+                    break;
+                case 'KeyI':
+                    setTrimStart(currentTime);
+                    break;
+                case 'KeyO':
+                    setTrimEnd(currentTime);
+                    break;
+                case 'KeyZ':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            handleRedo();
+                        } else {
+                            handleUndo();
+                        }
+                    }
+                    break;
+                case 'KeyY':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        handleRedo();
+                    }
+                    break;
+                case 'Delete':
+                case 'Backspace':
+                    // Only delete if not in an input/textarea (already handled at top of function)
+                    if (selectedSegmentId) {
+                        e.preventDefault();
+                        deleteSegment();
+                    }
+                    break;
+                case 'KeyS':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        handleSaveChanges();
+                    }
+                    break;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [currentTime, handleUndo, handleRedo, deleteSegment, selectedSegmentId, handleSaveChanges]); // Added handleSaveChanges dependency
 
     const handleTrimChange = useCallback((start, end) => {
         setTrimStart(start);
@@ -479,9 +497,9 @@ function Editor() {
                         <button
                             className="btn-save-changes-header"
                             onClick={handleSaveChanges}
-                            title="Save timeline edits"
+                            title="Save timeline edits (Cmd+s)"
                         >
-                            💾 Save Changes
+                            Save Changes (Cmd+s)
                         </button>
                     )}
 
