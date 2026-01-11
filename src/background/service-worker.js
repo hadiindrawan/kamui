@@ -58,7 +58,7 @@ async function handleStartRecording(message, sender, sendResponse) {
         try {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                files: ['cursor-tracker.js']
+                files: ['recording-widget.js', 'cursor-tracker.js']
             });
         } catch (e) {
             console.log('Content script already injected or cannot inject');

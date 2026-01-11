@@ -6,6 +6,8 @@ let currentSessionId = null;
 let eventLog = [];
 let audioContext = null;
 let mixedStream = null;
+let globalDisplayStream = null;
+let globalMicStream = null;
 let recordingStartTime = 0;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -90,6 +92,10 @@ async function startRecording(sessionId, tabId, micEnabled = false) {
         } else {
             console.log('Microphone disabled by user');
         }
+
+        // Store global references
+        globalDisplayStream = displayStream;
+        globalMicStream = micStream;
 
         // Mix audio streams
         const finalStream = await mixAudioStreams(displayStream, micStream);
@@ -199,10 +205,16 @@ async function stopRecording() {
 
             // Clean up ALL media streams and tracks
             if (mixedStream) {
-                mixedStream.getTracks().forEach(track => {
-                    track.stop();
-                });
+                mixedStream.getTracks().forEach(track => track.stop());
                 mixedStream = null;
+            }
+            if (globalDisplayStream) {
+                globalDisplayStream.getTracks().forEach(track => track.stop());
+                globalDisplayStream = null;
+            }
+            if (globalMicStream) {
+                globalMicStream.getTracks().forEach(track => track.stop());
+                globalMicStream = null;
             }
 
             // Close audio context
