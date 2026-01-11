@@ -20,6 +20,7 @@ function Editor() {
     const [exportProgress, setExportProgress] = useState(0);
     const [exportQuality, setExportQuality] = useState('high'); // high, medium, low
     const [exportScale, setExportScale] = useState(1); // 1x, 2x, 3x, 4x
+    const [exportFormat, setExportFormat] = useState('mp4'); // mp4, webm
 
     // Zoom settings
     const [zoomLevel, setZoomLevel] = useState(2);
@@ -421,6 +422,7 @@ function Editor() {
                     playbackSpeed,
                     exportQuality, // Pass quality for FFmpeg conversion
                     exportScale, // Pass scale for resolution upscaling
+                    format: exportFormat,
                     ...quality
                 },
                 (progress) => setExportProgress(progress)
@@ -465,7 +467,7 @@ function Editor() {
                 <div className="header-left">
                     <h1 className="header-title">
                         <Film size={22} />
-                        Video Editor
+                        Beunta Editor
                     </h1>
                     <div className="header-info">
                         <span><Zap size={14} /> {segments.length} segments</span>
@@ -788,6 +790,15 @@ function Editor() {
                                 <option value="high">High Quality</option>
                                 <option value="medium">Medium Quality</option>
                                 <option value="low">Low Quality</option>
+                            </select>
+                            <select
+                                className="quality-select"
+                                value={exportFormat}
+                                onChange={(e) => setExportFormat(e.target.value)}
+                                title="Export format"
+                            >
+                                <option value="mp4">MP4</option>
+                                <option value="webm">WebM</option>
                             </select>
                             <select
                                 className="quality-select"

@@ -6,6 +6,7 @@ let currentSessionId = null;
 let eventLog = [];
 let audioContext = null;
 let mixedStream = null;
+let recordingStartTime = 0;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
@@ -41,6 +42,7 @@ async function startRecording(sessionId, tabId, micEnabled = false) {
     currentSessionId = sessionId;
     recordedChunks = [];
     eventLog = [];
+    recordingStartTime = Date.now();
 
     try {
         // 1. IMPROVED: Use stricter constraints for maximum resolution
@@ -222,9 +224,11 @@ async function saveRecordingData() {
     const recording = {
         id: currentSessionId,
         videoBlob: blob,
+        id: currentSessionId,
+        videoBlob: blob,
         events: eventLog,
-        startTime: Date.now(),
-        duration: 0, // Will be calculated when video loads
+        startTime: recordingStartTime,
+        duration: (Date.now() - recordingStartTime) / 1000, // Duration in seconds
         resolution: {
             width: 1920,
             height: 1080

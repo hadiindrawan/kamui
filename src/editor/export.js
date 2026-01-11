@@ -197,8 +197,8 @@ export async function exportVideoMP4(recording, settings, onProgress) {
 
             onProgress(70);
 
-            // Step 3: Backend conversion if enabled
-            if (isBackendConversionEnabled()) {
+            // Step 3: Backend conversion if enabled and MP4 requested
+            if (isBackendConversionEnabled() && settings.format === 'mp4') {
                 try {
                     console.log('[Export] Starting backend conversion...');
 
@@ -253,6 +253,11 @@ export async function exportVideoMP4(recording, settings, onProgress) {
                         : 'Failed to connect to conversion service';
 
                     console.warn('[Export] Fallback to WebM:', errorMessage);
+
+                    // Alert user if they specifically requested MP4 but we fell back
+                    if (settings.format === 'mp4') {
+                        alert(`⚠️ MP4 conversion currently unavailable: ${errorMessage}\n\nFalling back to WebM export.`);
+                    }
 
                     // Continue to WebM fallback below
                 }

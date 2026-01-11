@@ -17,11 +17,11 @@ export default function RecordingsList({ recordings, onDelete, onOpen }) {
         return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
 
-    function formatSize(bytes) {
-        if (bytes < 1024 * 1024) {
-            return `${(bytes / 1024).toFixed(0)} KB`;
-        }
-        return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    function formatDuration(seconds) {
+        if (!seconds) return '00:00';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
 
     return (
@@ -38,8 +38,8 @@ export default function RecordingsList({ recordings, onDelete, onOpen }) {
                                 {formatDate(recording.startTime)}
                             </span>
                             <span>
-                                <HardDrive size={10} />
-                                {formatSize(recording.size)}
+                                <Clock size={10} />
+                                {formatDuration(recording.duration)}
                             </span>
                             <span>
                                 <Zap size={10} />
