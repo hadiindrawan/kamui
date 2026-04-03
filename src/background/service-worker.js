@@ -39,15 +39,13 @@ async function handleStartRecording(message, sender, sendResponse) {
         // Create offscreen document for recording
         await createOffscreenDocument();
 
-        // Create offscreen document for recording
-        await createOffscreenDocument();
-
         // Start recording in offscreen document
         const response = await chrome.runtime.sendMessage({
             type: 'OFFSCREEN_START_RECORDING',
             sessionId: sessionId,
             tabId: tab.id,
-            micEnabled: message.micEnabled || false
+            micEnabled: message.micEnabled || false,
+            quality: message.quality || 'best-quality'
         });
 
         if (!response || !response.success) {
@@ -58,23 +56,25 @@ async function handleStartRecording(message, sender, sendResponse) {
         recordingState = {
             isRecording: true,
             currentSessionId: sessionId,
-            tabId: tab.id
+            tabId: tab.id,
+            startTime: Date.now() // Track start time for global timer sync
         };
 
-        // Inject content script if not already injected
+        // 1. Ensure content script is injected into the ACTIVE tab
         try {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 files: ['recording-widget.js', 'cursor-tracker.js']
             });
         } catch (e) {
-            console.log('Content script already injected or cannot inject');
+            console.log('[Background] Widget script injection skipped (likely already there):', e.message);
         }
 
-        // Notify content script to start tracking
-        await chrome.tabs.sendMessage(tab.id, {
+        // 2. Broadcast to ALL tabs to show widget everywhere (for tabs already running the script)
+        await broadcastToAllTabs({
             type: 'START_TRACKING',
-            sessionId: sessionId
+            sessionId: sessionId,
+            startTime: recordingState.startTime
         });
 
         sendResponse({ success: true, sessionId });
@@ -98,21 +98,24 @@ async function handleStopRecording(message, sender, sendResponse) {
 
         const sessionId = recordingState.currentSessionId;
 
-        // Stop tracking in content script
-        if (recordingState.tabId) {
-            try {
-                await chrome.tabs.sendMessage(recordingState.tabId, {
-                    type: 'STOP_TRACKING'
-                });
-            } catch (e) {
-                console.log('Could not notify content script');
-            }
-        }
+        // Notify ALL tabs to stop tracking and hide widgets
+        await broadcastToAllTabs({
+            type: 'STOP_TRACKING'
+        });
 
-        // Stop recording in offscreen
-        const result = await chrome.runtime.sendMessage({
+        // Stop recording in offscreen with a safety timeout
+        // If the offscreen doc is under heavy load (1hr+ recording), it might be slow.
+        // We don't want to hang the UI.
+        const stopPromise = chrome.runtime.sendMessage({
             type: 'OFFSCREEN_STOP_RECORDING'
         });
+
+        const timeoutPromise = new Promise(r => setTimeout(() => r({ timeout: true }), 3000));
+        const result = await Promise.race([stopPromise, timeoutPromise]);
+
+        if (result?.timeout) {
+            console.warn('[SW] Offscreen stop timed out, proceeding with fallback ID');
+        }
 
         const recordingId = result?.recordingId || sessionId;
 
@@ -160,6 +163,71 @@ async function forwardToOffscreen(message) {
         console.error('Error forwarding to offscreen:', e);
     }
 }
+
+async function broadcastToAllTabs(message) {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+        try {
+            // Ignore restricted chrome:// and extension pages
+            if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+                try {
+                    await chrome.tabs.sendMessage(tab.id, message);
+                } catch (e) {
+                    // Script might not be there - reactive injection
+                    if (recordingState.isRecording) {
+                        try {
+                            await chrome.scripting.executeScript({
+                                target: { tabId: tab.id },
+                                files: ['recording-widget.js', 'cursor-tracker.js']
+                            });
+                            // Try again after injection
+                            setTimeout(() => chrome.tabs.sendMessage(tab.id, message).catch(() => { }), 100);
+                        } catch (err) {
+                            console.log(`[Background] Failed reactive injection for tab ${tab.id}`);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Tab might be restricted or closed
+        }
+    }
+}
+
+// Listen for tab updates to ensure widget is there
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && recordingState.isRecording) {
+        if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+            chrome.tabs.sendMessage(tabId, {
+                type: 'START_TRACKING',
+                sessionId: recordingState.currentSessionId,
+                startTime: recordingState.startTime
+            }).catch(() => {
+                // Reactive injection for new navigation
+                chrome.scripting.executeScript({
+                    target: { tabId },
+                    files: ['recording-widget.js', 'cursor-tracker.js']
+                }).catch(() => { });
+            });
+        }
+    }
+});
+
+// Refresh state when tab becomes active
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    if (recordingState.isRecording) {
+        try {
+            const tab = await chrome.tabs.get(activeInfo.tabId);
+            if (tab.url && !tab.url.startsWith('chrome://')) {
+                chrome.tabs.sendMessage(activeInfo.tabId, {
+                    type: 'START_TRACKING',
+                    sessionId: recordingState.currentSessionId,
+                    startTime: recordingState.startTime
+                }).catch(() => { });
+            }
+        } catch (e) { }
+    }
+});
 
 // Clean up on extension startup
 chrome.runtime.onStartup.addListener(() => {

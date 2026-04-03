@@ -20,12 +20,14 @@ function Popup() {
     const [isRecording, setIsRecording] = useState(false);
     const [recordings, setRecordings] = useState([]);
     const [currentSessionId, setCurrentSessionId] = useState(null);
-    const [micEnabled, setMicEnabled] = useState(false); // Default OFF
+    const [micEnabled, setMicEnabled] = useState(false);
+    const [quality, setQuality] = useState('best-quality');
 
     useEffect(() => {
         loadRecordings();
         checkRecordingState();
         loadMicSetting();
+        loadQualitySetting();
 
         const handleKeyDown = (e) => {
             if (e.key === 'Enter' && !isRecording) {
@@ -51,9 +53,13 @@ function Popup() {
 
     async function loadRecordings() {
         try {
-            const { getAllRecordings } = await import('../storage/indexeddb.js');
+            const { getAllRecordings, getInterruptedRecordings } = await import('../storage/indexeddb.js');
             const allRecordings = await getAllRecordings();
-            setRecordings(allRecordings.sort((a, b) => b.startTime - a.startTime));
+            const interrupted = await getInterruptedRecordings();
+            
+            // Merge both lists
+            const combined = [...allRecordings, ...interrupted];
+            setRecordings(combined.sort((a, b) => b.startTime - a.startTime));
         } catch (e) {
             console.error('Error loading recordings:', e);
         }
@@ -62,9 +68,27 @@ function Popup() {
     async function loadMicSetting() {
         try {
             const result = await chrome.storage.local.get(['micEnabled']);
-            setMicEnabled(result.micEnabled || false); // Default OFF
+            setMicEnabled(result.micEnabled || false);
         } catch (e) {
             console.error('Error loading mic setting:', e);
+        }
+    }
+
+    async function loadQualitySetting() {
+        try {
+            const result = await chrome.storage.local.get(['quality']);
+            setQuality(result.quality || 'best-quality');
+        } catch (e) {
+            console.error('Error loading quality setting:', e);
+        }
+    }
+
+    async function setQualitySetting(newQuality) {
+        setQuality(newQuality);
+        try {
+            await chrome.storage.local.set({ quality: newQuality });
+        } catch (e) {
+            console.error('Error saving quality setting:', e);
         }
     }
 
@@ -82,7 +106,8 @@ function Popup() {
         try {
             const response = await chrome.runtime.sendMessage({
                 type: 'START_RECORDING',
-                micEnabled: micEnabled
+                micEnabled: micEnabled,
+                quality: quality
             });
             if (response.success) {
                 setIsRecording(true);
@@ -124,6 +149,35 @@ function Popup() {
         }
     }
 
+    async function handleRecover(recordingId) {
+        if (!confirm('Recover this interrupted recording?')) return;
+        try {
+            const { saveRecording, getChunks, getRecording } = await import('../storage/indexeddb.js');
+            const chunks = await getChunks(recordingId);
+            
+            if (chunks.length === 0) {
+                alert('No data found to recover');
+                return;
+            }
+
+            // Estimate duration and finalize
+            const recording = {
+                id: recordingId,
+                startTime: chunks[0].timestamp,
+                duration: Math.round((chunks[chunks.length - 1].timestamp - chunks[0].timestamp) / 1000),
+                mimeType: 'video/webm',
+                events: [] // Unfortunately events might be lost if not committed
+            };
+
+            await saveRecording(recording);
+            alert('Successfully recovered! You can now open it in the editor.');
+            loadRecordings();
+        } catch (e) {
+            console.error('Error recovering:', e);
+            alert('Failed to recover recording');
+        }
+    }
+
     function handleOpenEditor(recordingId) {
         chrome.tabs.create({
             url: chrome.runtime.getURL(`src/editor/index.html?id=${recordingId}`)
@@ -159,17 +213,40 @@ function Popup() {
                     </div>
                 )}
 
-                {/* Microphone Toggle */}
-                <div className="mic-toggle">
-                    <button
-                        className={`btn-toggle ${micEnabled ? 'active' : ''}`}
-                        onClick={toggleMicrophone}
-                        disabled={isRecording}
-                        title={micEnabled ? 'Microphone ON' : 'Microphone OFF'}
-                    >
-                        {micEnabled ? <Mic size={16} /> : <MicOff size={16} />}
-                        <span>{micEnabled ? 'Mic ON' : 'Mic OFF'}</span>
-                    </button>
+                {/* Quality and Microphone Selectors */}
+                <div className="selector-grid">
+                    <div className="mic-toggle">
+                        <button
+                            className={`btn-toggle ${micEnabled ? 'active' : ''}`}
+                            onClick={toggleMicrophone}
+                            disabled={isRecording}
+                            title={micEnabled ? 'Microphone ON' : 'Microphone OFF'}
+                        >
+                            {micEnabled ? <Mic size={16} /> : <MicOff size={16} />}
+                            <span>{micEnabled ? 'Mic ON' : 'Mic OFF'}</span>
+                        </button>
+                    </div>
+
+                    <div className="quality-toggle">
+                        <div className="quality-options">
+                            <button
+                                className={`quality-chip ${quality === 'best-performance' ? 'active' : ''}`}
+                                onClick={() => setQualitySetting('best-performance')}
+                                disabled={isRecording}
+                            >
+                                <Zap size={14} />
+                                Performance
+                            </button>
+                            <button
+                                className={`quality-chip ${quality === 'best-quality' ? 'active' : ''}`}
+                                onClick={() => setQualitySetting('best-quality')}
+                                disabled={isRecording}
+                            >
+                                <Video size={14} />
+                                Quality
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -193,6 +270,7 @@ function Popup() {
                         recordings={recordings}
                         onDelete={handleDelete}
                         onOpen={handleOpenEditor}
+                        onRecover={handleRecover}
                     />
                 )}
             </div>

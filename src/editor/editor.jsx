@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Rnd } from 'react-rnd';
 import {
     Film, Play, Pause, SkipBack, SkipForward,
     Download, Zap, HardDrive, Settings,
-    ZoomIn, Gauge, Scissors
+    ZoomIn, Gauge, Scissors, Lock, MousePointer2
 } from 'lucide-react';
 import CanvasPlayer from './CanvasPlayer.jsx';
 import Timeline from './Timeline.jsx';
@@ -18,9 +19,10 @@ function Editor() {
     const [duration, setDuration] = useState(0);
     const [isExporting, setIsExporting] = useState(false);
     const [exportProgress, setExportProgress] = useState(0);
-    const [exportQuality, setExportQuality] = useState('high'); // high, medium, low
+    const [exportQuality, setExportQuality] = useState('best-quality'); // best-performance, best-quality
     const [exportScale, setExportScale] = useState(1); // 1x, 2x, 3x, 4x
     const [exportFormat, setExportFormat] = useState('mp4'); // mp4, webm
+    const [conversionService, setConversionService] = useState('local'); // local, cloud
 
     // Zoom settings
     const [zoomLevel, setZoomLevel] = useState(2);
@@ -32,7 +34,13 @@ function Editor() {
 
     // Aspect ratio and framing (Cursorful-style)
     const [aspectRatio, setAspectRatio] = useState('16:9'); // 16:9, 9:16, 1:1, 4:5
-    const [backgroundColor, setBackgroundColor] = useState('#1a2e3b');
+    const [backgroundMode, setBackgroundMode] = useState('hidden'); // hidden, color, gradient, image
+    const [backgroundColor, setBackgroundColor] = useState('#1a2e3b'); // This acts as 'color' value
+    const [backgroundValue, setBackgroundValue] = useState(''); // specialized value (gradient string or image url)
+    const [backgroundBlur, setBackgroundBlur] = useState('none');
+    const [insetPadding, setInsetPadding] = useState(40);
+    const [showShadow, setShowShadow] = useState(true);
+    const [showBorder, setShowBorder] = useState(false);
     const [showFollowCursor, setShowFollowCursor] = useState(false);
 
     // Trim
@@ -46,6 +54,10 @@ function Editor() {
 
     const canvasPlayerRef = useRef(null);
     const hasInitializedSegments = useRef(false);
+    const canvasContainerRef = useRef(null);
+
+    // Video Dimensions for overlay calculation
+    const [videoDimensions, setVideoDimensions] = useState({ width: 1920, height: 1080 });
 
     // Track if there are unsaved edits
     const [hasPendingEdits, setHasPendingEdits] = useState(false);
@@ -119,6 +131,7 @@ function Editor() {
                 startTime: event.time,
                 duration: zoomDuration,
                 zoomLevel: zoomLevel, // Each segment has its own zoom level
+                positionMode: 'follow', // Default auto segments to follow cursor
                 // Use normalized coordinates if available, fallback to absolute
                 x: event.x !== undefined ? event.x : 0.5,
                 y: event.y !== undefined ? event.y : 0.5,
@@ -157,12 +170,18 @@ function Editor() {
                 // Ensure backward compatibility: add default zoomLevel to segments that don't have it
                 const segmentsWithZoom = rec.segments.map(seg => ({
                     ...seg,
-                    zoomLevel: seg.zoomLevel !== undefined ? seg.zoomLevel : 2 // Default to 2x if missing
+                    zoomLevel: seg.zoomLevel !== undefined ? seg.zoomLevel : 2, // Default to 2x if missing
+                    positionMode: seg.positionMode || 'follow' // Default to follow if missing
                 }));
                 setSegments(segmentsWithZoom);
                 setHistory([JSON.stringify(segmentsWithZoom)]);
                 setHistoryIndex(0);
                 hasInitializedSegments.current = true; // Mark as already initialized
+            }
+
+            // Sync export quality with recording intent
+            if (rec.quality) {
+                setExportQuality(rec.quality);
             }
 
             // Load saved editor settings if they exist
@@ -173,7 +192,13 @@ function Editor() {
                 if (settings.transitionDuration !== undefined) setTransitionDuration(settings.transitionDuration);
                 if (settings.playbackSpeed !== undefined) setPlaybackSpeed(settings.playbackSpeed);
                 if (settings.aspectRatio !== undefined) setAspectRatio(settings.aspectRatio);
+                if (settings.backgroundMode !== undefined) setBackgroundMode(settings.backgroundMode);
                 if (settings.backgroundColor !== undefined) setBackgroundColor(settings.backgroundColor);
+                if (settings.backgroundValue !== undefined) setBackgroundValue(settings.backgroundValue);
+                if (settings.backgroundBlur !== undefined) setBackgroundBlur(settings.backgroundBlur);
+                if (settings.insetPadding !== undefined) setInsetPadding(settings.insetPadding);
+                if (settings.showShadow !== undefined) setShowShadow(settings.showShadow);
+                if (settings.showBorder !== undefined) setShowBorder(settings.showBorder);
                 if (settings.trimStart !== undefined) setTrimStart(settings.trimStart);
                 if (settings.trimEnd !== undefined) setTrimEnd(settings.trimEnd);
             }
@@ -206,6 +231,10 @@ function Editor() {
         }
     }, [trimEnd]);
 
+    const handleVideoDimensions = useCallback((dims) => {
+        setVideoDimensions(dims);
+    }, []);
+
     const handleSeek = useCallback((time) => {
         if (Number.isFinite(time)) {
             const clampedTime = Math.max(0, Math.min(duration, time));
@@ -229,16 +258,18 @@ function Editor() {
             startTime: currentTime * 1000,
             duration: zoomDuration,
             zoomLevel: zoomLevel, // Use current global zoom level as default
+            positionMode: 'fixed', // Default to fixed for manual segments
             x: 0.5, // Normalized center
             y: 0.5,
-            viewportWidth: 1920,
-            viewportHeight: 1080
+            viewportWidth: videoDimensions.width,
+            viewportHeight: videoDimensions.height
         };
         const newSegments = [...segments, newSegment].sort((a, b) => a.startTime - b.startTime);
         setSegments(newSegments);
         setHasPendingEdits(true); // Mark as having pending edits
         saveHistory(newSegments);
-    }, [currentTime, zoomDuration, zoomLevel, segments, saveHistory]);
+        setSelectedSegmentId(newSegment.id); // Select the new segment
+    }, [currentTime, zoomDuration, zoomLevel, segments, saveHistory, videoDimensions]);
 
     const updateSegment = useCallback((id, updates, saveToHistory = false) => {
         const newSegments = segments.map(seg =>
@@ -293,6 +324,7 @@ function Editor() {
                 startTime: event.time,
                 duration: zoomDuration,
                 zoomLevel: 2, // Default zoom level for reset
+                positionMode: 'follow', // Reset to follow cursor
                 // Use normalized coordinates if available, fallback to absolute
                 x: event.x !== undefined ? event.x : 0.5,
                 y: event.y !== undefined ? event.y : 0.5,
@@ -329,7 +361,13 @@ function Editor() {
                         transitionDuration,
                         playbackSpeed,
                         aspectRatio,
+                        backgroundMode,
                         backgroundColor,
+                        backgroundValue,
+                        backgroundBlur,
+                        insetPadding,
+                        showShadow,
+                        showBorder,
                         trimStart,
                         trimEnd
                     }
@@ -419,14 +457,13 @@ function Editor() {
         try {
             const { exportVideoMP4 } = await import('./export.js');
 
-            // Quality presets
+            // Quality presets - Binary Model
             const qualitySettings = {
-                high: { bitrate: 8000000, fps: 30 },
-                medium: { bitrate: 4000000, fps: 30 },
-                low: { bitrate: 2000000, fps: 24 }
+                'best-quality': { bitrate: 12000000, fps: 30, preset: 'medium' },
+                'best-performance': { bitrate: 2500000, fps: 30, preset: 'ultrafast' }
             };
 
-            const quality = qualitySettings[exportQuality] || qualitySettings.high;
+            const quality = qualitySettings[exportQuality] || qualitySettings['best-quality'];
 
             await exportVideoMP4(
                 recording,
@@ -441,6 +478,16 @@ function Editor() {
                     exportQuality, // Pass quality for FFmpeg conversion
                     exportScale, // Pass scale for resolution upscaling
                     format: exportFormat,
+                    conversionService, // Use selected conversion service
+                    aspectRatio,
+                    backgroundColor,
+                    backgroundMode,
+                    backgroundValue,
+                    backgroundBlur,
+                    insetPadding,
+                    showShadow,
+                    showBorder,
+                    showFollowCursor,
                     ...quality
                 },
                 (progress) => setExportProgress(progress)
@@ -460,6 +507,141 @@ function Editor() {
         const ms = Math.floor((seconds % 1) * 100);
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
     }
+
+    // Helper to calculate visual video rect on the canvas logic
+
+    function getVideoRect() {
+        if (!canvasContainerRef.current) return { x: 0, y: 0, width: 0, height: 0, scale: 1 };
+        const container = canvasContainerRef.current.getBoundingClientRect();
+
+        const videoW = videoDimensions.width || 1920;
+        const videoH = videoDimensions.height || 1080;
+        const videoRatio = videoW / videoH;
+
+        const aspectRatios = {
+            'Native': videoRatio,
+            '16:9': 16 / 9,
+            '9:16': 9 / 16,
+            '1:1': 1,
+            '4:5': 4 / 5
+        };
+        const targetRatio = aspectRatios[aspectRatio] || 16 / 9;
+
+        // 1. Calculate the Visual Canvas Size (The area that the <canvas> element occupies)
+        // With Global Scene Zoom, the Camera Zooms into the SCENE used as the "Source Video"
+        // But the `mouse events` and `overlay position` logic in `react-rnd`:
+        // We set `Rnd` position based on `segment.x` (0-1).
+        // AND in Global Zoom, `segment.x` is normalized to the SCENE.
+        // Wait, `updateSegment` logic earlier assumed 0-1 relative to Video Content for "Follow".
+        // In `CanvasPlayer`:
+        //   x: (seg.x * videoRectW + videoRectX) / canvasW
+        // This means `seg.x` is still stored relative to the VIDEO CONTENT (1920x1080).
+        // This is GOOD. We don't want to break existing data or "Follow" logic.
+
+        // So `Rnd` overlay should overlay the VIDEO CONTENT portion of the scene.
+        // We need to calculate `renderX, renderY, renderW, renderH` which represents the VIDEO CONTENT
+        // VISUALLY on the screen.
+
+        // BUT `CanvasPlayer` now renders the SCENE (Background + Video) into the `canvas`.
+        // The `canvas` (DOM Element) is what we see.
+        // We can overlay `Rnd` on top of the canvas container.
+        // The `canvas` element is fitted into `container` via `getVideoRect` part 1 (visualCanvasW/H).
+
+        // Inside that `canvas` element (the Scene), the video is placed at `videoRectX/Y/W/H` (Scene coordinates).
+        // We need to map [Video Rect in Scene] -> [Visual Screen Coordinates].
+
+        const containerW = container.width;
+        const containerH = container.height;
+        const containerRatio = containerW / containerH;
+
+        let canvasRatio = targetRatio;
+
+        let visualCanvasW, visualCanvasH;
+        if (containerRatio > canvasRatio) {
+            visualCanvasH = containerH;
+            visualCanvasW = containerH * canvasRatio;
+        } else {
+            visualCanvasW = containerW;
+            visualCanvasH = containerW / canvasRatio;
+        }
+
+        const visualCanvasX = (containerW - visualCanvasW) / 2;
+        const visualCanvasY = (containerH - visualCanvasH) / 2;
+
+        // Now calculate Video Rect relative to Scene (Normalized 0-1)
+        let sceneVideoX, sceneVideoY, sceneVideoW, sceneVideoH;
+        // Logic duplicated from CanvasPlayer (ideally shared, but sim is okay)
+
+        // Canvas Dimensions (Virtual Scene Resolution)
+        // We need this to calculate accurate "Inset" padding scale?
+        // Actually we just need ratios.
+
+        // Scene W/H logic from CanvasPlayer:
+        let sceneW = videoW;
+        let sceneH = videoH;
+        if (aspectRatio !== 'Native') {
+            if (targetRatio >= 1) {
+                sceneH = videoH;
+                sceneW = sceneH * targetRatio;
+            } else {
+                sceneW = videoH; // 9:16 logic
+                sceneH = sceneW / targetRatio;
+            }
+        }
+
+        // Video Placement in Scene
+        let vrX = 0, vrY = 0, vrW = sceneW, vrH = sceneH;
+
+        if (backgroundMode === 'hidden') {
+            // Contain with bars
+            const sceneRatio = sceneW / sceneH;
+            if (sceneRatio > videoRatio) {
+                vrH = sceneH;
+                vrW = vrH * videoRatio;
+                vrX = (sceneW - vrW) / 2;
+            } else {
+                vrW = sceneW;
+                vrH = vrW / videoRatio;
+                vrY = (sceneH - vrH) / 2;
+                vrX = 0; // Fix X centering?
+                // Wait, logic in CanvasPlayer:
+                // else { videoRectW = canvasW; videoRectH = videoRectW / videoRatio; videoRectX = 0; videoRectY = ... }
+                // Yes.
+            }
+        } else {
+            // Inset
+            const scaleBase = Math.min(sceneW, sceneH) / 1080;
+            const scaledPadding = insetPadding * scaleBase;
+            const safeW = sceneW - (scaledPadding * 2);
+            const safeH = sceneH - (scaledPadding * 2);
+            const fitScale = Math.min(safeW / videoW, safeH / videoH);
+
+            vrW = videoW * fitScale;
+            vrH = videoH * fitScale;
+            vrX = (sceneW - vrW) / 2;
+            vrY = (sceneH - vrH) / 2;
+        }
+
+        // Map Scene Video Rect to Visual Canvas Rect
+        // Visual Canvas is the Scene.
+        const renderX = visualCanvasX + (vrX / sceneW) * visualCanvasW;
+        const renderY = visualCanvasY + (vrY / sceneH) * visualCanvasH;
+        const renderW = (vrW / sceneW) * visualCanvasW;
+        const renderH = (vrH / sceneH) * visualCanvasH;
+
+        return {
+            x: renderX,
+            y: renderY,
+            width: renderW,
+            height: renderH
+        };
+    }
+
+    const videoRect = getVideoRect();
+    const selectedSegment = segments.find(s => s.id === selectedSegmentId);
+
+    // We only show overlay if Position Mode is Fixed
+    const showZoomOverlay = selectedSegment && selectedSegment.positionMode === 'fixed';
 
     if (loading) {
         return (
@@ -514,7 +696,7 @@ function Editor() {
 
             <main className="editor-main">
                 <div className="canvas-section">
-                    <div className="canvas-container">
+                    <div className="canvas-container" ref={canvasContainerRef}>
                         <CanvasPlayer
                             ref={canvasPlayerRef}
                             recording={recording}
@@ -527,11 +709,71 @@ function Editor() {
                             playbackSpeed={playbackSpeed}
                             aspectRatio={aspectRatio}
                             backgroundColor={backgroundColor}
+                            backgroundMode={backgroundMode}
+                            backgroundValue={backgroundValue}
+                            backgroundBlur={backgroundBlur}
+                            insetPadding={insetPadding}
+                            showShadow={showShadow}
+                            showBorder={showBorder}
                             showFollowCursor={showFollowCursor}
                             onTimeUpdate={handleTimeUpdate}
                             onDurationChange={handleDurationChange}
+                            onVideoDimensions={handleVideoDimensions}
                             onSeek={handleSeek}
                         />
+
+                        {/* Custom Zoom Overlay */}
+                        {showZoomOverlay && (
+                            <div
+                                className="zoom-overlay-container"
+                                style={{
+                                    position: 'absolute',
+                                    left: videoRect.x,
+                                    top: videoRect.y,
+                                    width: videoRect.width,
+                                    height: videoRect.height,
+                                    pointerEvents: 'none', // Allow clicks to pass through to video controls if not hitting drag box
+                                    zIndex: 10
+                                }}
+                            >
+                                <Rnd
+                                    position={{
+                                        x: selectedSegment.x * videoRect.width - ((videoRect.width / selectedSegment.zoomLevel) / 2),
+                                        y: selectedSegment.y * videoRect.height - ((videoRect.height / selectedSegment.zoomLevel) / 2)
+                                    }}
+                                    size={{
+                                        width: videoRect.width / selectedSegment.zoomLevel,
+                                        height: videoRect.height / selectedSegment.zoomLevel
+                                    }}
+                                    enableResizing={false}
+                                    onDragStop={(e, d) => {
+                                        // Calculate center point from top-left drag position
+                                        const halfW = (videoRect.width / selectedSegment.zoomLevel) / 2;
+                                        const halfH = (videoRect.height / selectedSegment.zoomLevel) / 2;
+
+                                        const centerX = d.x + halfW;
+                                        const centerY = d.y + halfH;
+
+                                        // Normalize to 0-1
+                                        const normX = Math.max(0, Math.min(1, centerX / videoRect.width));
+                                        const normY = Math.max(0, Math.min(1, centerY / videoRect.height));
+
+                                        updateSegment(selectedSegment.id, { x: normX, y: normY }, true);
+                                    }}
+                                    bounds="parent"
+                                    style={{
+                                        border: '2px solid #FE6D73',
+                                        boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.5)', // Dim surroundings
+                                        pointerEvents: 'auto',
+                                        cursor: 'move'
+                                    }}
+                                >
+                                    <div className="zoom-target-label">
+                                        Zoom Target
+                                    </div>
+                                </Rnd>
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -545,6 +787,30 @@ function Editor() {
                                 <div className="setting-info">
                                     <span>Selected Segment Settings</span>
                                 </div>
+
+                                {/* Position Mode Selector */}
+                                <div className="setting-row">
+                                    <div className="setting-label">
+                                        <span>Position Mode</span>
+                                    </div>
+                                    <div className="segment-mode-toggle">
+                                        <button
+                                            className={`mode-btn ${segments.find(s => s.id === selectedSegmentId)?.positionMode !== 'fixed' ? 'active' : ''}`}
+                                            onClick={() => updateSegment(selectedSegmentId, { positionMode: 'follow' }, true)}
+                                            title="Camera follows cursor (auto)"
+                                        >
+                                            <MousePointer2 size={14} /> Follow
+                                        </button>
+                                        <button
+                                            className={`mode-btn ${segments.find(s => s.id === selectedSegmentId)?.positionMode === 'fixed' ? 'active' : ''}`}
+                                            onClick={() => updateSegment(selectedSegmentId, { positionMode: 'fixed' }, true)}
+                                            title="Fixed position (manual)"
+                                        >
+                                            <Lock size={14} /> Fixed
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <div className="setting-row">
                                     <div className="setting-label">
                                         <span>Zoom Level</span>
@@ -674,8 +940,9 @@ function Editor() {
                                     setHasPendingEdits(true);
                                 }}
                             >
+                                <option value="Native">Native (Match Video)</option>
                                 <option value="16:9">Landscape (16:9)</option>
-                                <option value="9:16">Mobile (9:16)</option>
+                                <option value="9:16">TiKTok / Reel (9:16)</option>
                                 <option value="1:1">Square (1:1)</option>
                                 <option value="4:5">Instagram (4:5)</option>
                             </select>
@@ -685,16 +952,131 @@ function Editor() {
                             <div className="setting-label">
                                 <span>Background</span>
                             </div>
-                            <input
-                                type="color"
-                                className="color-picker"
-                                value={backgroundColor}
-                                onChange={(e) => {
-                                    setBackgroundColor(e.target.value);
-                                    setHasPendingEdits(true);
-                                }}
-                            />
+                            <div className="bg-checkered-preview">
+                                <div
+                                    className="bg-preview-fill"
+                                    style={{
+                                        background: backgroundMode === 'image' && backgroundValue ? `url(${backgroundValue}) center/cover` :
+                                            backgroundMode === 'gradient' ? backgroundValue :
+                                                backgroundMode === 'color' ? backgroundColor : '#1a2e3b'
+                                    }}
+                                />
+                            </div>
                         </div>
+
+                        <div className="bg-mode-selector">
+                            {['hidden', 'color', 'gradient', 'image'].map(mode => (
+                                <button
+                                    key={mode}
+                                    className={`bg-mode-btn ${backgroundMode === mode ? 'active' : ''}`}
+                                    onClick={() => {
+                                        setBackgroundMode(mode);
+                                        setHasPendingEdits(true);
+                                    }}
+                                >
+                                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+
+                        {backgroundMode === 'color' && (
+                            <div className="setting-row">
+                                <span className="setting-sublabel">Color</span>
+                                <input
+                                    type="color"
+                                    className="color-picker"
+                                    value={backgroundColor}
+                                    onChange={(e) => {
+                                        setBackgroundColor(e.target.value);
+                                        setHasPendingEdits(true);
+                                    }}
+                                />
+                            </div>
+                        )}
+
+                        {backgroundMode === 'gradient' && (
+                            <div className="presets-grid">
+                                {['linear-gradient(to right, #ff7e5f, #feb47b)',
+                                    'linear-gradient(120deg, #a1c4fd 0%, #c2e9fb 100%)',
+                                    'linear-gradient(to top, #cfd9df 0%, #e2ebf0 100%)',
+                                    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                    'linear-gradient(to right, #43e97b 0%, #38f9d7 100%)',
+                                    'linear-gradient(to top, #30cfd0 0%, #330867 100%)'
+                                ].map((grad, i) => (
+                                    <button
+                                        key={i}
+                                        className="preset-btn"
+                                        style={{ background: grad }}
+                                        onClick={() => {
+                                            setBackgroundValue(grad);
+                                            setHasPendingEdits(true);
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
+                        {backgroundMode === 'image' && (
+                            <div className="presets-grid">
+                                {['https://images.unsplash.com/photo-1579546929518-9e396f3cc809?auto=format&fit=crop&w=400&h=250&q=80',
+                                    'https://images.unsplash.com/photo-1557683316-973673baf926?auto=format&fit=crop&w=400&h=250&q=80',
+                                    'https://images.unsplash.com/photo-1620121692029-d088224ddc74?auto=format&fit=crop&w=400&h=250&q=80',
+                                    'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=400&h=250&q=80'
+                                ].map((img, i) => (
+                                    <button
+                                        key={i}
+                                        className="preset-btn"
+                                        style={{ backgroundImage: `url(${img})` }}
+                                        onClick={() => {
+                                            setBackgroundValue(img);
+                                            setHasPendingEdits(true);
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
+                        {backgroundMode !== 'hidden' && (
+                            <>
+                                <div className="setting-row">
+                                    <div className="setting-label">
+                                        <span>Padding</span>
+                                        <span className="setting-value">{insetPadding}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        className="setting-slider"
+                                        min="0"
+                                        max="200"
+                                        step="10"
+                                        value={insetPadding}
+                                        onChange={(e) => {
+                                            setInsetPadding(parseInt(e.target.value));
+                                            setHasPendingEdits(true);
+                                        }}
+                                    />
+                                </div>
+                                <div className="checkbox-group">
+                                    <label className="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={showShadow}
+                                            onChange={(e) => setShowShadow(e.target.checked)}
+                                        />
+                                        <span>Shadow</span>
+                                    </label>
+                                    <label className="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={showBorder}
+                                            onChange={(e) => setShowBorder(e.target.checked)}
+                                        />
+                                        <span>Border</span>
+                                    </label>
+                                </div>
+                            </>
+                        )}
+
 
                         <div className="setting-row">
                             <label className="checkbox-label">
@@ -805,9 +1187,8 @@ function Editor() {
                                 onChange={(e) => setExportQuality(e.target.value)}
                                 title="Export quality"
                             >
-                                <option value="high">High Quality</option>
-                                <option value="medium">Medium Quality</option>
-                                <option value="low">Low Quality</option>
+                                <option value="best-performance">Best Performance & Speed</option>
+                                <option value="best-quality">Best Quality (High Bitrate)</option>
                             </select>
                             <select
                                 className="quality-select"
@@ -827,6 +1208,17 @@ function Editor() {
                                 <option value="1">1x (Original)</option>
                                 <option value="2">2x (Double)</option>
                             </select>
+                            {exportFormat === 'mp4' && (
+                                <select
+                                    className="quality-select"
+                                    value={conversionService}
+                                    onChange={(e) => setConversionService(e.target.value)}
+                                    title="Conversion service"
+                                >
+                                    <option value="local">Local (Browser)</option>
+                                    <option value="cloud">Cloud (Backend)</option>
+                                </select>
+                            )}
                             <button className="btn-export" onClick={handleExport}>
                                 <Download size={18} />
                                 Export Video

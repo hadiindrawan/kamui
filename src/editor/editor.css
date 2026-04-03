@@ -669,12 +669,11 @@ body {
     position: absolute;
     top: 0;
     height: 3px;
-    background: linear-gradient(90deg, 
-        transparent, 
-        var(--color-success) 20%, 
-        var(--color-success) 80%, 
-        transparent
-    );
+    background: linear-gradient(90deg,
+            transparent,
+            var(--color-success) 20%,
+            var(--color-success) 80%,
+            transparent);
     pointer-events: none;
     opacity: 0.4;
     border-radius: 2px;
@@ -713,13 +712,11 @@ body {
     position: absolute;
     top: 0;
     bottom: 0;
-    background: repeating-linear-gradient(
-        45deg,
-        rgba(0, 0, 0, 0.7),
-        rgba(0, 0, 0, 0.7) 10px,
-        rgba(0, 0, 0, 0.6) 10px,
-        rgba(0, 0, 0, 0.6) 20px
-    );
+    background: repeating-linear-gradient(45deg,
+            rgba(0, 0, 0, 0.7),
+            rgba(0, 0, 0, 0.7) 10px,
+            rgba(0, 0, 0, 0.6) 10px,
+            rgba(0, 0, 0, 0.6) 20px);
     pointer-events: none;
     border-left: 2px solid var(--color-warning);
     border-right: 2px solid var(--color-warning);
@@ -989,6 +986,7 @@ body {
     background: var(--color-border);
     border-radius: 3px;
 }
+
 /* Save Changes Section */
 .save-section {
     background: rgba(254, 109, 115, 0.1);
@@ -1066,4 +1064,156 @@ body {
 
 .segment-selected .segment-content {
     background: rgba(254, 109, 115, 0.2);
+}
+
+/* Custom Zoom UI */
+.segment-mode-toggle {
+    display: flex;
+    background: #2a3b47;
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+}
+
+.mode-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px;
+    border: none;
+    background: transparent;
+    color: #8da5b5;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.mode-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e6e6e6;
+}
+
+.mode-btn.active {
+    background: #0f1c23;
+    color: #FE6D73;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* Zoom Overlay */
+.canvas-container {
+    position: relative;
+    /* Ensure overlay is relative to this */
+}
+
+.zoom-overlay-container {
+    /* Positioned absolutely via inline styles in JS */
+    pointer-events: none;
+}
+
+.zoom-target-label {
+    position: absolute;
+    top: -24px;
+    left: 0;
+    background: #FE6D73;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    opacity: 0.9;
+}
+
+/* Background UI */
+.bg-checkered-preview {
+    height: 48px;
+    border-radius: 6px;
+    background-color: #2a3b47;
+    background-image:
+        linear-gradient(45deg, #374a56 25%, transparent 25%),
+        linear-gradient(-45deg, #374a56 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #374a56 75%),
+        linear-gradient(-45deg, transparent 75%, #374a56 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+    overflow: hidden;
+    margin-bottom: 12px;
+    border: 1px solid var(--color-border);
+}
+
+.bg-preview-fill {
+    width: 100%;
+    height: 100%;
+    transition: background 0.3s;
+}
+
+.bg-mode-selector {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    background: var(--color-bg-card);
+    padding: 3px;
+    border-radius: 6px;
+}
+
+.bg-mode-btn {
+    flex: 1;
+    padding: 6px 4px;
+    font-size: 11px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.bg-mode-btn:hover {
+    color: var(--color-text);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.bg-mode-btn.active {
+    background: var(--color-base-light);
+    color: white;
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.presets-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.preset-btn {
+    aspect-ratio: 16/9;
+    background-size: cover;
+    background-position: center;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.preset-btn:hover {
+    border-color: var(--color-accent);
+    transform: scale(1.05);
+}
+
+.checkbox-group {
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+}
+
+.setting-sublabel {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin-bottom: 4px;
+    display: block;
 }

@@ -1,19 +1,20 @@
-import { saveRecording, updateRecording } from '../storage/indexeddb.js';
+import { saveRecording, updateRecording, saveChunk, getChunks } from '../storage/indexeddb.js';
 
 let mediaRecorder = null;
-let recordedChunks = [];
 let currentSessionId = null;
+let currentThumbnail = null;
 let eventLog = [];
 let audioContext = null;
 let mixedStream = null;
 let globalDisplayStream = null;
 let globalMicStream = null;
 let recordingStartTime = 0;
+let currentQuality = 'best-quality';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case 'OFFSCREEN_START_RECORDING':
-            startRecording(message.sessionId, message.tabId, message.micEnabled)
+            startRecording(message.sessionId, message.tabId, message.micEnabled, message.quality)
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true;
@@ -40,27 +41,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-async function startRecording(sessionId, tabId, micEnabled = false) {
+async function startRecording(sessionId, tabId, micEnabled = false, quality = 'best-quality') {
     currentSessionId = sessionId;
-    recordedChunks = [];
+    currentQuality = quality;
     eventLog = [];
     recordingStartTime = Date.now();
 
     try {
-        // 1. IMPROVED: Use stricter constraints for maximum resolution
+        // 1. IMPROVED: Dynamic constraints based on quality preference
+        // Best Quality: Request 4K/60fps to get the max possible source resolution
+        // Best Performance: Request 720p/30fps for ultra-low CPU and disk usage
+        const isPerformance = quality === 'best-performance';
+        
         const displayMediaOptions = {
             video: {
-                // Request 4K to ensure we get the max available source resolution
-                width: { ideal: 3840, max: 3840 },
-                height: { ideal: 2160, max: 2160 },
-                frameRate: { ideal: 60 },
-                // VITAL: Prevents Chrome from downscaling the image
-                resizeMode: "none"
+                width: isPerformance ? { ideal: 1280 } : { ideal: 3840, max: 3840 },
+                height: isPerformance ? { ideal: 720 } : { ideal: 2160, max: 2160 },
+                frameRate: isPerformance ? { ideal: 30 } : { ideal: 60 },
+                // VITAL: 'none' for quality to prevent blurring, 'allow-chroma-subsampling' for speed
+                resizeMode: isPerformance ? "allow-chroma-subsampling" : "none"
             },
             audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                sampleRate: 48000 // Standard for video (vs 44.1k for music)
+                systemAudio: 'include',
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                sampleRate: 48000
             }
         };
 
@@ -103,28 +109,42 @@ async function startRecording(sessionId, tabId, micEnabled = false) {
         // 3. IMPROVED: Codec Selection & Bitrate
         // We prioritize AV1 (best quality/size) > VP9 (great) > VP8 (fast)
         const mimeTypes = [
-            'video/webm;codecs=av01.0.05M.08,opus', // AV1 (Ultra crisp)
             'video/webm;codecs=vp9,opus',           // VP9 (Standard high qual)
+            'video/webm;codecs=av01,opus',          // AV1 (Modern alternative)
             'video/webm;codecs=vp8,opus'            // Fallback
         ];
 
         let selectedMimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type));
 
-        // Set up MediaRecorder with high quality settings
+        // 4. IMPROVED: Ultra-lightweight bitrate for Performance mode
+        // High Quality: 15 Mbps for crystal clear 4K/1080p
+        // Performance: 3 Mbps (720p) for smallest possible file size and fastest editor handling
+        const bitrate = quality === 'best-performance' ? 3 * 1000 * 1000 : 15 * 1000 * 1000;
+
         const options = {
             mimeType: selectedMimeType || 'video/webm',
-            // 4. IMPROVED: Massive bitrate increase
-            // 50 Mbps ensures that when you zoom 300% on a generic button, it isn't blocky.
-            videoBitsPerSecond: 50 * 1000 * 1000
+            videoBitsPerSecond: bitrate
         };
 
-        console.log(`Starting Recorder with: ${options.mimeType} at 50Mbps`);
+        console.log(`Starting Recorder with: ${options.mimeType} at ${(bitrate / 1000000).toFixed(1)} Mbps (${quality})`);
 
         mediaRecorder = new MediaRecorder(finalStream, options);
 
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                recordedChunks.push(event.data);
+        // Capture a thumbnail from the first frame of display stream
+        captureThumbnail(displayStream).then(thumb => {
+            currentThumbnail = thumb;
+        }).catch(err => console.error('[Recorder] Thumbnail capture failed:', err));
+
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+                // 1. PERSIST IMMEDIATELY to IndexedDB for safety/crash-protection
+                // This ensures that even if the tab crashes or user closes it, data is safe.
+                saveChunk(currentSessionId, e.data).catch(err => {
+                    console.error('[Recorder] Failed to save chunk to IDB:', err);
+                });
+                
+                // VITAL: Do NOT push to an in-memory array like recordedChunks.push(e.data).
+                // For long-duration (1hr+), we must rely entirely on Disk to avoid OOM crashes.
             }
         };
 
@@ -145,11 +165,44 @@ async function startRecording(sessionId, tabId, micEnabled = false) {
 
         // Start recording
         // Slice every 500ms for safer memory management with high bitrate
-        mediaRecorder.start(500);
+        // Flush chunks every 5 seconds for incremental saving
+        mediaRecorder.start(5000);
     } catch (error) {
         console.error('Recording Start Failed:', error);
         throw error;
     }
+}
+
+async function captureThumbnail(stream) {
+    return new Promise((resolve) => {
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
+
+        video.onloadedmetadata = async () => {
+            await video.play();
+            // Wait a tiny bit for the first frame to decode
+            await new Promise(r => setTimeout(r, 300));
+
+            const canvas = document.createElement('canvas');
+            const thumbW = 320;
+            const ratio = video.videoHeight / video.videoWidth;
+            canvas.width = thumbW;
+            canvas.height = thumbW * ratio;
+
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.82); // Compressed JPEG
+
+            // Clean up
+            video.pause();
+            video.srcObject = null;
+            resolve(dataUrl);
+        };
+        video.onerror = () => resolve(null);
+    });
 }
 
 async function mixAudioStreams(displayStream, micStream) {
@@ -231,33 +284,33 @@ async function stopRecording() {
 }
 
 async function saveRecordingData() {
-    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    // Zero-Memory Saving: Note that we NO LONGER create a massive Blob here.
+    // The main 'videoBlob' will be null in the initial DB entry.
+    // The Editor/Player will re-hydrate the full blob on-demand from the consistent chunks in IDB.
 
     const recording = {
         id: currentSessionId,
-        videoBlob: blob,
-        id: currentSessionId,
-        videoBlob: blob,
+        videoBlob: null, // Avoid OOM. Re-hydrated by storage/indexeddb.js when needed.
         events: eventLog,
         startTime: recordingStartTime,
-        duration: (Date.now() - recordingStartTime) / 1000, // Duration in seconds
+        duration: (Date.now() - recordingStartTime) / 1000,
         resolution: {
             width: 1920,
             height: 1080
         },
-        mimeType: blob.type,
-        size: blob.size
+        mimeType: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'video/webm',
+        thumbnail: currentThumbnail,
+        quality: currentQuality
     };
 
     try {
         await saveRecording(recording);
-        console.log(`Recording saved: ${currentSessionId}, Size: ${(blob.size / 1024 / 1024).toFixed(2)} MB, Events: ${eventLog.length}`);
-    } catch (error) {
-        console.error('Error saving recording:', error);
+        console.log(`[Recorder] Final session saved: ${currentSessionId}, Duration: ${recording.duration.toFixed(1)}s`);
+    } catch (err) {
+        console.error('[Recorder] Failed to persist final session metadata:', err);
     }
 
     // Reset
-    recordedChunks = [];
     eventLog = [];
     currentSessionId = null;
 }

@@ -228,7 +228,12 @@
             if (this.timerInterval) {
                 clearInterval(this.timerInterval);
             }
-            this.startTime = Date.now();
+            
+            // Only initialize startTime if it wasn't already set (e.g. by show() from background state)
+            if (!this.startTime) {
+                this.startTime = Date.now();
+            }
+            
             this.updateTimer();
             this.timerInterval = setInterval(() => this.updateTimer(), 1000);
         }
@@ -271,9 +276,13 @@
             this.isDragging = false;
         }
 
-        show() {
+        show(startTime = null) {
             if (!this.container) {
                 this.create();
+            }
+            
+            if (startTime) {
+                this.startTime = startTime;
             }
             this.start();
         }
@@ -283,13 +292,41 @@
     if (!window.recordingWidget) {
         window.recordingWidget = new RecordingWidget();
 
-        // Listen for messages from background script
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (message.type === 'START_TRACKING') {
-                window.recordingWidget.show();
-            } else if (message.type === 'STOP_TRACKING') {
-                window.recordingWidget.stop();
+        // Listen for messages from background script with context safety
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+                try {
+                    if (message.type === 'START_TRACKING') {
+                        window.recordingWidget.show(message.startTime);
+                    } else if (message.type === 'STOP_TRACKING') {
+                        window.recordingWidget.stop();
+                    }
+                } catch (e) {
+                    console.log('[RecordingWidget] Context invalidated, message ignored');
+                }
+            });
+        }
+
+        // Auto-initialize if already recording (on page load)
+        const checkInitialState = () => {
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                try {
+                    chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.log('[RecordingWidget] Runtime context lost during check');
+                            return;
+                        }
+                        if (response && response.state && response.state.isRecording) {
+                            console.log('[RecordingWidget] Detected active recording on load, showing widget');
+                            window.recordingWidget.show(response.state.startTime);
+                        }
+                    });
+                } catch (e) {
+                    console.log('[RecordingWidget] Initial state check failed (context lost)');
+                }
             }
-        });
+        };
+
+        checkInitialState();
     }
 })();

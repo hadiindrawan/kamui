@@ -232,37 +232,88 @@
 .recording-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px;
+  gap: 12px;
+  padding: 8px;
   background: var(--color-bg-card);
-  border-radius: 8px;
+  border-radius: 12px;
   transition: all 0.2s ease;
   border: 1px solid transparent;
+  margin-bottom: 4px;
 }
 
-.recording-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--color-border);
+.recording-item.interrupted {
+  border-color: rgba(249, 115, 22, 0.3);
+  background: rgba(249, 115, 22, 0.05);
+}
+
+.recording-thumbnail {
+  width: 64px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  background: var(--color-base-dark);
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+}
+
+.recording-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbnail-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.thumbnail-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.recording-thumbnail:hover .thumbnail-overlay {
+  opacity: 1;
 }
 
 .recording-info {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .recording-title {
   font-weight: 500;
   font-size: 13px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recording-meta {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--color-text-muted);
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
 .recording-meta span {
@@ -305,47 +356,87 @@
   background: rgba(23, 195, 178, 0.1);
 }
 /* ========================================
-   Microphone Toggle
+   Selectors Grid
    ======================================== */
 
+.selector-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 16px;
+}
+
 .mic-toggle {
-    margin-top: 12px;
+    margin-top: 0; /* Override old margin */
+}
+
+.quality-toggle {
+    display: flex;
+    flex-direction: column;
+}
+
+.quality-options {
+    display: flex;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 2px;
+    height: 100%;
+}
+
+.quality-chip {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: #888;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 6px 4px;
+}
+
+.quality-chip:hover:not(:disabled) {
+    color: #bbb;
+}
+
+.quality-chip.active {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.quality-chip.active[class*="performance"] {
+    color: var(--color-warning);
+}
+
+.quality-chip.active[class*="quality"] {
+    color: var(--color-success);
+}
+
+.quality-chip:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .btn-toggle {
+    height: 100%;
     display: flex;
     align-items: center;
     gap: 8px;
     width: 100%;
-    padding: 10px 16px;
+    padding: 10px 12px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
     color: #999;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
-}
-
-.btn-toggle:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.2);
-    color: #ddd;
-}
-
-.btn-toggle.active {
-    background: rgba(99, 102, 241, 0.15);
-    border-color: rgba(99, 102, 241, 0.3);
-    color: #6366f1;
-}
-
-.btn-toggle.active:hover:not(:disabled) {
-    background: rgba(99, 102, 241, 0.25);
-    border-color: rgba(99, 102, 241, 0.4);
-}
-
-.btn-toggle:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
 }
