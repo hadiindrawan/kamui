@@ -4,7 +4,8 @@ import { Rnd } from 'react-rnd';
 import {
     Film, Play, Pause, SkipBack, SkipForward,
     Download, Zap, HardDrive, Settings,
-    ZoomIn, Gauge, Scissors, Lock, MousePointer2
+    ZoomIn, Gauge, Scissors, Lock, MousePointer2,
+    Volume2, VolumeX
 } from 'lucide-react';
 import CanvasPlayer from './CanvasPlayer.jsx';
 import Timeline from './Timeline.jsx';
@@ -41,6 +42,8 @@ function Editor() {
     const [insetPadding, setInsetPadding] = useState(40);
     const [showShadow, setShowShadow] = useState(true);
     const [showBorder, setShowBorder] = useState(false);
+    const [borderRadius, setBorderRadius] = useState(12);
+    const [isMuted, setIsMuted] = useState(false);
     const [showFollowCursor, setShowFollowCursor] = useState(false);
 
     // Trim
@@ -199,6 +202,8 @@ function Editor() {
                 if (settings.insetPadding !== undefined) setInsetPadding(settings.insetPadding);
                 if (settings.showShadow !== undefined) setShowShadow(settings.showShadow);
                 if (settings.showBorder !== undefined) setShowBorder(settings.showBorder);
+                if (settings.borderRadius !== undefined) setBorderRadius(settings.borderRadius);
+                if (settings.isMuted !== undefined) setIsMuted(settings.isMuted);
                 if (settings.trimStart !== undefined) setTrimStart(settings.trimStart);
                 if (settings.trimEnd !== undefined) setTrimEnd(settings.trimEnd);
             }
@@ -240,6 +245,9 @@ function Editor() {
             const clampedTime = Math.max(0, Math.min(duration, time));
             setCurrentTime(clampedTime);
             setIsPlaying(false);
+            if (canvasPlayerRef.current) {
+                canvasPlayerRef.current.seekTo(clampedTime);
+            }
         }
     }, [duration]);
 
@@ -247,6 +255,9 @@ function Editor() {
         const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
         if (Number.isFinite(newTime)) {
             setCurrentTime(newTime);
+            if (canvasPlayerRef.current) {
+                canvasPlayerRef.current.seekTo(newTime);
+            }
         }
     }, [currentTime, duration]);
 
@@ -368,6 +379,8 @@ function Editor() {
                         insetPadding,
                         showShadow,
                         showBorder,
+                        borderRadius,
+                        isMuted,
                         trimStart,
                         trimEnd
                     }
@@ -378,10 +391,10 @@ function Editor() {
         }
 
         // Force re-render by seeking to current position
-        const pos = currentTime;
-        setCurrentTime(0);
-        setTimeout(() => setCurrentTime(pos), 10);
-    }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, playbackSpeed, aspectRatio, backgroundColor, trimStart, trimEnd]);
+        if (canvasPlayerRef.current) {
+            canvasPlayerRef.current.seekTo(currentTime);
+        }
+    }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, playbackSpeed, aspectRatio, backgroundColor, trimStart, trimEnd, borderRadius, isMuted]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -475,6 +488,7 @@ function Editor() {
                     trimStart,
                     trimEnd,
                     playbackSpeed,
+                    isMuted,
                     exportQuality, // Pass quality for FFmpeg conversion
                     exportScale, // Pass scale for resolution upscaling
                     format: exportFormat,
@@ -487,6 +501,7 @@ function Editor() {
                     insetPadding,
                     showShadow,
                     showBorder,
+                    borderRadius,
                     showFollowCursor,
                     ...quality
                 },
@@ -695,7 +710,7 @@ function Editor() {
             </header>
 
             <main className="editor-main">
-                <div className="canvas-section">
+                <div className="canvas-section" onClick={() => setSelectedSegmentId(null)}>
                     <div className="canvas-container" ref={canvasContainerRef}>
                         <CanvasPlayer
                             ref={canvasPlayerRef}
@@ -715,6 +730,8 @@ function Editor() {
                             insetPadding={insetPadding}
                             showShadow={showShadow}
                             showBorder={showBorder}
+                            borderRadius={borderRadius}
+                            isMuted={isMuted}
                             showFollowCursor={showFollowCursor}
                             onTimeUpdate={handleTimeUpdate}
                             onDurationChange={handleDurationChange}
@@ -1074,6 +1091,24 @@ function Editor() {
                                         <span>Border</span>
                                     </label>
                                 </div>
+                                <div className="setting-row">
+                                    <div className="setting-label">
+                                        <span>Border Radius</span>
+                                        <span className="setting-value">{borderRadius}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        className="setting-slider"
+                                        min="0"
+                                        max="100"
+                                        step="4"
+                                        value={borderRadius}
+                                        onChange={(e) => {
+                                            setBorderRadius(parseInt(e.target.value));
+                                            setHasPendingEdits(true);
+                                        }}
+                                    />
+                                </div>
                             </>
                         )}
 
@@ -1168,6 +1203,13 @@ function Editor() {
                     </button>
                     <button className="btn-control btn-small" onClick={() => handleSkip(5)}>
                         <SkipForward size={18} />
+                    </button>
+                    <button 
+                        className="btn-control btn-small" 
+                        onClick={() => setIsMuted(!isMuted)}
+                        title={isMuted ? "Unmute" : "Mute"}
+                    >
+                        {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
                     </button>
                 </div>
 

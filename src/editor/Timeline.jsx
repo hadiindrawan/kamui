@@ -84,11 +84,14 @@ export default function Timeline({
 
     const handleTimelineClick = useCallback((e) => {
         if (trimDragging) return;
+        // Deselect current segment when clicking timeline background
+        if (onSelectSegment) onSelectSegment(null);
+        
         const time = getTimeFromPosition(e.clientX);
         if (Number.isFinite(time) && onSeek) {
             onSeek(time);
         }
-    }, [trimDragging, getTimeFromPosition, onSeek]);
+    }, [trimDragging, getTimeFromPosition, onSeek, onSelectSegment]);
 
     const handleSegmentMouseDown = useCallback((e, segment, edge) => {
         e.stopPropagation();
@@ -363,7 +366,11 @@ export default function Timeline({
                         <div className="track-label">
                             <ZoomIn size={14} />
                         </div>
-                        <div className="track-content" ref={segmentsTrackRef}>
+                        <div 
+                            className="track-content" 
+                            ref={segmentsTrackRef}
+                            onClick={() => onSelectSegment && onSelectSegment(null)}
+                        >
                             {segments.length > 0 && segments.map((segment) => {
                                 const leftPercent = getPositionPercent(segment.startTime / 1000);
                                 const widthPercent = (segment.duration / 1000 / duration) * 100;
@@ -418,7 +425,10 @@ export default function Timeline({
                                         dragAxis="x"
                                         className={`segment-rnd segment-${segment.type || 'zoom'} ${selectedSegmentId === segment.id ? 'segment-selected' : ''
                                             }`}
-                                        onClick={() => onSelectSegment && onSelectSegment(segment.id)}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onSelectSegment && onSelectSegment(segment.id);
+                                        }}
                                     >
                                         <div className="segment-content">
                                             {segment.type === 'crop' ? <Crop size={12} /> : <ZoomIn size={12} />}

@@ -22,7 +22,9 @@ const CanvasPlayer = forwardRef(({
     onTimeUpdate,
     onDurationChange,
     onVideoDimensions,
-    onSeek
+    onSeek,
+    borderRadius = 12,
+    isMuted = false
 }, ref) => {
     const canvasRef = useRef(null);
     const videoRef = useRef(null);
@@ -38,6 +40,7 @@ const CanvasPlayer = forwardRef(({
     const [isDraggingProgress, setIsDraggingProgress] = useState(false);
     const [hoverTime, setHoverTime] = useState(null);
     const [lastRefresh, setLastRefresh] = useState(0); // Trigger for settings-based re-renders
+    const [metadataReady, setMetadataReady] = useState(false);
 
     useImperativeHandle(ref, () => ({
         getCurrentTime: () => videoRef.current?.currentTime || 0,
@@ -47,6 +50,13 @@ const CanvasPlayer = forwardRef(({
             }
         }
     }));
+
+    // Sync muted state
+    useEffect(() => {
+        if (videoRef.current) {
+            videoRef.current.muted = isMuted;
+        }
+    }, [isMuted]);
 
     // Load background image when needed
     useEffect(() => {
@@ -151,7 +161,42 @@ const CanvasPlayer = forwardRef(({
                 zoomLevel, zoomDuration, transitionDuration
             }
         };
-    }, [recording, segments, aspectRatio, backgroundMode, insetPadding, showFollowCursor, zoomLevel, zoomDuration, transitionDuration]);
+    }, [recording, segments, aspectRatio, backgroundMode, insetPadding, showFollowCursor, zoomLevel, zoomDuration, transitionDuration, metadataReady]);
+
+    const parseCSSGradient = (cssString, ctx, width, height) => {
+        if (!cssString || typeof cssString !== 'string' || !cssString.includes('gradient')) {
+            return cssString;
+        }
+
+        try {
+            // Very basic parser for presets like linear-gradient(direction, color1, color2)
+            const colors = cssString.match(/#[a-fA-F0-9]{3,6}|rgba?\([^)]+\)/g);
+            if (!colors || colors.length < 2) return '#000';
+
+            let x0 = 0, y0 = 0, x1 = 0, y1 = height; // Default top to bottom
+
+            if (cssString.includes('to right')) {
+                x1 = width; y1 = 0;
+            } else if (cssString.includes('to top')) {
+                y0 = height; y1 = 0;
+            } else if (cssString.includes('135deg')) {
+                x1 = width; y1 = height;
+            } else if (cssString.includes('120deg')) {
+                x1 = width * 0.8; y1 = height;
+            }
+
+            const grad = ctx.createLinearGradient(x0, y0, x1, y1);
+            colors.forEach((color, i) => {
+                // Handle optional percentages like #fff 0%
+                const stop = i / (colors.length - 1);
+                grad.addColorStop(stop, color);
+            });
+            return grad;
+        } catch (e) {
+            console.warn('Failed to parse gradient:', e);
+            return '#000';
+        }
+    };
 
     const refreshBackground = () => {
         if (!sceneLayout) return;
@@ -177,16 +222,10 @@ const CanvasPlayer = forwardRef(({
         if (blurAmount > 0) bctx.filter = `blur(${blurAmount}px)`;
 
         if (backgroundMode === 'color' || backgroundMode === 'hidden') {
-            bctx.fillStyle = backgroundMode === 'hidden' ? backgroundColor : (backgroundValue || backgroundColor);
+            bctx.fillStyle = backgroundMode === 'hidden' ? backgroundColor : (backgroundColor || '#1a2e3b');
             bctx.fillRect(0, 0, width, height);
         } else if (backgroundMode === 'gradient') {
-            if (Array.isArray(backgroundValue)) {
-                const grad = bctx.createLinearGradient(0, 0, 0, height);
-                backgroundValue.forEach((color, i) => grad.addColorStop(i / (backgroundValue.length - 1), color));
-                bctx.fillStyle = grad;
-            } else {
-                bctx.fillStyle = backgroundValue || '#000';
-            }
+            bctx.fillStyle = parseCSSGradient(backgroundValue, bctx, width, height);
             bctx.fillRect(0, 0, width, height);
         } else if (backgroundMode === 'image' && backgroundImageRef.current) {
             const img = backgroundImageRef.current;
@@ -257,6 +296,16 @@ const CanvasPlayer = forwardRef(({
     }, [isPlaying]);
 
     useEffect(() => {
+        // Sync video currentTime with prop when paused
+        if (videoRef.current && !isPlaying && Number.isFinite(currentTime)) {
+            const diff = Math.abs(videoRef.current.currentTime - currentTime);
+            if (diff > 0.05) { // 50ms threshold to prevent loops
+                videoRef.current.currentTime = currentTime;
+            }
+        }
+    }, [currentTime, isPlaying]);
+
+    useEffect(() => {
         // Force re-render when display properties change while paused
         if (videoRef.current && !isPlaying) {
             renderFrame();
@@ -265,7 +314,8 @@ const CanvasPlayer = forwardRef(({
         currentTime, zoomLevel,
         aspectRatio, backgroundMode,
         backgroundValue, backgroundBlur,
-        insetPadding, showShadow, showBorder
+        insetPadding, showShadow, showBorder, borderRadius, metadataReady,
+        sceneLayout
     ]);
 
     async function setupVideo() {
@@ -281,6 +331,7 @@ const CanvasPlayer = forwardRef(({
             URL.revokeObjectURL(videoUrlRef.current);
         }
 
+        setMetadataReady(false); // Reset for new video
         const videoUrl = URL.createObjectURL(recording.videoBlob);
         videoUrlRef.current = videoUrl;
 
@@ -291,6 +342,7 @@ const CanvasPlayer = forwardRef(({
 
         video.onloadedmetadata = () => {
             console.log('[CanvasPlayer] Metadata loaded:', video.videoWidth, 'x', video.videoHeight);
+            setMetadataReady(true);
             
             // Priority 1: Browser reported duration
             let actualDuration = video.duration;
@@ -319,6 +371,7 @@ const CanvasPlayer = forwardRef(({
                 const checkDims = setInterval(() => {
                     if (video.videoWidth > 0 && video.videoHeight > 0) {
                         clearInterval(checkDims);
+                        setMetadataReady(true);
                         onVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
                         renderFrame();
                     }
@@ -361,7 +414,11 @@ const CanvasPlayer = forwardRef(({
         if (!canvas || !video || !video.videoWidth || !layout || !backgroundBuffer) return;
 
         const ctx = canvas.getContext('2d', { alpha: false });
-        const currentTimeMs = (video.currentTime || 0) * 1000;
+        
+        // Use prop as source of truth when paused to ensure instant feedback
+        // Use video.currentTime when playing for smooth playback
+        const timeToRender = isPlaying ? video.currentTime : currentTime;
+        const currentTimeMs = (timeToRender || 0) * 1000;
 
         // Sync canvas size
         if (canvas.width !== layout.width || canvas.height !== layout.height) {
@@ -371,7 +428,9 @@ const CanvasPlayer = forwardRef(({
 
         // Calculate SCENE Camera
         const targetCamera = calculateCameraPosition(currentTimeMs, layout.events, layout.cameraConfig);
-        const camera = interpolateCamera(lastCameraRef.current, targetCamera, 0.12);
+        // Snap camera if paused, otherwise interpolate for smooth motion while playing
+        const factor = isPlaying ? 0.12 : 1.0;
+        const camera = interpolateCamera(lastCameraRef.current, targetCamera, factor);
         lastCameraRef.current = camera;
 
         ctx.save();
@@ -385,20 +444,44 @@ const CanvasPlayer = forwardRef(({
         ctx.drawImage(backgroundBuffer, 0, 0);
 
         // 2. Draw Video
+        const vRadius = Math.max(0, borderRadius * (layout.vW / layout.videoW));
+
         if (backgroundMode !== 'hidden' && showShadow) {
+            ctx.save();
             ctx.fillStyle = 'black';
             ctx.shadowColor = 'rgba(0,0,0,0.5)';
             ctx.shadowBlur = 40; ctx.shadowOffsetY = 20;
-            ctx.fillRect(layout.vX, layout.vY, layout.vW, layout.vH);
-            ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+            
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
+                ctx.fill();
+            } else {
+                ctx.fillRect(layout.vX, layout.vY, layout.vW, layout.vH);
+            }
+            ctx.restore();
+        }
+
+        ctx.save();
+        if (vRadius > 0 && ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
+            ctx.clip();
         }
 
         ctx.drawImage(video, 0, 0, layout.videoW, layout.videoH, layout.vX, layout.vY, layout.vW, layout.vH);
+        ctx.restore();
 
         if (backgroundMode !== 'hidden' && showBorder) {
             ctx.strokeStyle = 'rgba(255,255,255,0.2)';
             ctx.lineWidth = 2;
-            ctx.strokeRect(layout.vX, layout.vY, layout.vW, layout.vH);
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(layout.vX, layout.vY, layout.vW, layout.vH);
+            }
         }
 
         // 3. Overlays
