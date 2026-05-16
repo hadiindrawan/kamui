@@ -3,7 +3,7 @@
  * Handles communication with the video conversion backend service
  */
 
-import { config } from '../config.js';
+import { config } from '../../shared/config.js';
 
 /**
  * Custom error class for API errors

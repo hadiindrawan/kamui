@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
-import { calculateCameraPosition, interpolateCamera } from './camera.js';
+import { calculateCameraPosition, interpolateCamera } from '../utils/camera.js';
 
 const CanvasPlayer = forwardRef(({
     recording,
@@ -765,4 +765,4 @@ const CanvasPlayer = forwardRef(({
     );
 });
 
-export default CanvasPlayer;
+export default React.memo(CanvasPlayer);

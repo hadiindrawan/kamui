@@ -16,7 +16,7 @@
         "service_worker": "service-worker.js"
     },
     "action": {
-        "default_popup": "src/popup/index.html",
+        "default_popup": "src/features/popup/index.html",
         "default_icon": {
             "16": "icons/icon16.png",
             "48": "icons/icon48.png",
@@ -43,7 +43,7 @@
     "web_accessible_resources": [
         {
             "resources": [
-                "src/offscreen/index.html",
+                "src/core/offscreen/index.html",
                 "ffmpeg/*"
             ],
             "matches": [

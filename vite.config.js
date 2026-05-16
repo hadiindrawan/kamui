@@ -28,12 +28,12 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, 'src/popup/index.html'),
-        editor: resolve(__dirname, 'src/editor/index.html'),
-        offscreen: resolve(__dirname, 'src/offscreen/index.html'),
-        'service-worker': resolve(__dirname, 'src/background/service-worker.js'),
-        'cursor-tracker': resolve(__dirname, 'src/content/cursor-tracker.js'),
-        'recording-widget': resolve(__dirname, 'src/content/recording-widget.js')
+        popup: resolve(__dirname, 'src/features/popup/index.html'),
+        editor: resolve(__dirname, 'src/features/editor/index.html'),
+        offscreen: resolve(__dirname, 'src/core/offscreen/index.html'),
+        'service-worker': resolve(__dirname, 'src/core/background/service-worker.js'),
+        'cursor-tracker': resolve(__dirname, 'src/core/content/cursor-tracker.js'),
+        'recording-widget': resolve(__dirname, 'src/core/content/recording-widget.js')
       },
       output: {
         entryFileNames: (chunkInfo) => {
