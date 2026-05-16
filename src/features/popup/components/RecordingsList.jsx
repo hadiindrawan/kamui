@@ -1,7 +1,7 @@
 import React from 'react';
-import { Pencil, Trash2, Clock, HardDrive, Zap, RotateCcw, AlertCircle, Video, Play } from 'lucide-react';
+import { Pencil, Trash2, Clock, HardDrive, Zap, RotateCcw, AlertCircle, Video, Play, PlayCircle } from 'lucide-react';
 
-export default function RecordingsList({ recordings, onDelete, onOpen, onRecover }) {
+export default function RecordingsList({ recordings, onDelete, onOpen, onRecover, onResume }) {
     function formatDate(timestamp) {
         if (!timestamp) return 'Unknown';
         const date = new Date(timestamp);
@@ -85,6 +85,13 @@ export default function RecordingsList({ recordings, onDelete, onOpen, onRecover
                                 <Pencil size={16} />
                             </button>
                         )}
+                        <button
+                            className="btn-icon btn-resume"
+                            onClick={() => onResume(recording.id)}
+                            title="Resume recording"
+                        >
+                            <PlayCircle size={16} />
+                        </button>
                         <button
                             className="btn-icon btn-delete"
                             onClick={() => onDelete(recording.id)}
