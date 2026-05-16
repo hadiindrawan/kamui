@@ -5,7 +5,7 @@ import {
     RefreshCw, ZoomOut, Crop, ChevronDown
 } from 'lucide-react';
 
-export default function Timeline({
+const Timeline = React.memo(function Timeline({
     duration,
     currentTime,
     segments = [],
@@ -452,4 +452,6 @@ export default function Timeline({
             </div>
         </div>
     );
-}
+});
+
+export default Timeline;

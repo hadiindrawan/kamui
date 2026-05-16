@@ -7,8 +7,8 @@ import {
     ZoomIn, Gauge, Scissors, Lock, MousePointer2,
     Volume2, VolumeX
 } from 'lucide-react';
-import CanvasPlayer from './CanvasPlayer.jsx';
-import Timeline from './Timeline.jsx';
+import CanvasPlayer from './components/CanvasPlayer.jsx';
+import Timeline from './components/Timeline.jsx';
 import './editor.css';
 
 export default function Editor() {
@@ -164,7 +164,7 @@ export default function Editor() {
                 return;
             }
 
-            const { getRecording } = await import('../storage/indexeddb.js');
+            const { getRecording } = await import('../../storage/indexeddb.js');
             const rec = await getRecording(recordingId);
 
             if (!rec) throw new Error('Recording not found');
@@ -236,7 +236,7 @@ export default function Editor() {
         setLoading(true);
 
         try {
-            const { saveRecording, saveChunk } = await import('../storage/indexeddb.js');
+            const { saveRecording, saveChunk } = await import('../../storage/indexeddb.js');
             const newId = `upload_${Date.now()}`;
             
             // Save the file as a chunk
@@ -412,7 +412,7 @@ export default function Editor() {
             const params = new URLSearchParams(window.location.search);
             const recordingId = params.get('id');
             if (recordingId) {
-                const { updateRecording } = await import('../storage/indexeddb.js');
+                const { updateRecording } = await import('../../storage/indexeddb.js');
                 await updateRecording(recordingId, {
                     segments,
                     editorSettings: {
@@ -517,7 +517,7 @@ export default function Editor() {
         setExportProgress(0);
 
         try {
-            const { exportVideoMP4 } = await import('./export.js');
+            const { exportVideoMP4 } = await import('./utils/export.js');
 
             // Quality presets - Binary Model
             const qualitySettings = {

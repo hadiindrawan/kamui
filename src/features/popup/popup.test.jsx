@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Popup from './popup';
 
-jest.mock('../storage/indexeddb.js', () => ({
+jest.mock('../../storage/indexeddb.js', () => ({
     getAllRecordings: jest.fn().mockResolvedValue([]),
     getInterruptedRecordings: jest.fn().mockResolvedValue([]),
     deleteRecording: jest.fn().mockResolvedValue(),

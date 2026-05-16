@@ -4,18 +4,18 @@ import userEvent from '@testing-library/user-event';
 import Editor from './editor';
 
 // Mock the indexeddb imports
-jest.mock('../storage/indexeddb.js', () => ({
+jest.mock('../../storage/indexeddb.js', () => ({
     getRecording: jest.fn().mockResolvedValue({ id: 'mock-id', events: [] }),
     updateRecording: jest.fn().mockResolvedValue(),
 }));
 
 // Mock the canvas player and timeline as they are complex to test directly within the editor
-jest.mock('./CanvasPlayer.jsx', () => {
+jest.mock('./components/CanvasPlayer.jsx', () => {
     const React = require('react');
     return React.forwardRef((props, ref) => <div data-testid="mock-canvas-player" />);
 });
 
-jest.mock('./Timeline.jsx', () => {
+jest.mock('./components/Timeline.jsx', () => {
     const React = require('react');
     return (props) => <div data-testid="mock-timeline" />;
 });

@@ -13,7 +13,7 @@ import {
     Mic,
     MicOff
 } from 'lucide-react';
-import RecordingsList from './RecordingsList';
+import RecordingsList from './components/RecordingsList';
 import './popup.css';
 
 export default function Popup() {
@@ -53,7 +53,7 @@ export default function Popup() {
 
     async function loadRecordings() {
         try {
-            const { getAllRecordings, getInterruptedRecordings } = await import('../storage/indexeddb.js');
+            const { getAllRecordings, getInterruptedRecordings } = await import('../../storage/indexeddb.js');
             const allRecordings = await getAllRecordings();
             const interrupted = await getInterruptedRecordings();
             
@@ -140,7 +140,7 @@ export default function Popup() {
     async function handleDelete(recordingId) {
         if (!confirm('Delete this recording?')) return;
         try {
-            const { deleteRecording } = await import('../storage/indexeddb.js');
+            const { deleteRecording } = await import('../../storage/indexeddb.js');
             await deleteRecording(recordingId);
             loadRecordings();
         } catch (e) {
@@ -152,7 +152,7 @@ export default function Popup() {
     async function handleRecover(recordingId) {
         if (!confirm('Recover this interrupted recording?')) return;
         try {
-            const { saveRecording, getChunks, getRecording } = await import('../storage/indexeddb.js');
+            const { saveRecording, getChunks, getRecording } = await import('../../storage/indexeddb.js');
             const chunks = await getChunks(recordingId);
             
             if (chunks.length === 0) {
@@ -180,13 +180,13 @@ export default function Popup() {
 
     function handleOpenEditor(recordingId) {
         chrome.tabs.create({
-            url: chrome.runtime.getURL(`src/editor/index.html?id=${recordingId}`)
+            url: chrome.runtime.getURL(`src/features/editor/index.html?id=${recordingId}`)
         });
     }
 
     function handleOpenStandaloneEditor() {
         chrome.tabs.create({
-            url: chrome.runtime.getURL(`src/editor/index.html`)
+            url: chrome.runtime.getURL(`src/features/editor/index.html`)
         });
     }
 

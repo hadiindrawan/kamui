@@ -1,4 +1,4 @@
-import { saveRecording, updateRecording, saveChunk, getChunks } from '../storage/indexeddb.js';
+import { saveRecording, updateRecording, saveChunk, getChunks } from '../../storage/indexeddb.js';
 
 let mediaRecorder = null;
 let currentSessionId = null;

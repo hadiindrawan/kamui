@@ -1,7 +1,7 @@
 // MP4 video export using canvas frame capture and backend API conversion
 import { calculateCameraPosition, interpolateCamera } from './camera.js';
-import { conversionAPI, APIError } from '../services/api-client.js';
-import { config, isBackendConversionEnabled } from '../config.js';
+import { conversionAPI, APIError } from '../../../core/services/api-client.js';
+import { config, isBackendConversionEnabled } from '../../../shared/config.js';
 
 
 export async function exportVideoMP4(recording, settings, onProgress) {
