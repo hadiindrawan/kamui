@@ -17,6 +17,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             handleStopRecording(message, sender, sendResponse);
             return true;
 
+        case 'RESUME_RECORDING':
+            handleResumeRecording(message, sender, sendResponse);
+            return true;
+
         case 'GET_STATE':
             sendResponse({ state: recordingState });
             break;
@@ -86,6 +90,61 @@ async function handleStartRecording(message, sender, sendResponse) {
             currentSessionId: null,
             tabId: null
         };
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+async function handleResumeRecording(message, sender, sendResponse) {
+    try {
+        const { sessionId, segmentId, micEnabled, quality } = message;
+
+        // Get active tab
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+        // Create offscreen document for recording
+        await createOffscreenDocument();
+
+        // Start recording in offscreen document
+        const response = await chrome.runtime.sendMessage({
+            type: 'OFFSCREEN_START_RECORDING',
+            sessionId: sessionId,
+            segmentId: segmentId,
+            tabId: tab.id,
+            micEnabled: micEnabled || false,
+            quality: quality || 'best-quality'
+        });
+
+        if (!response || !response.success) {
+            throw new Error(response?.error || 'Failed to resume recording');
+        }
+
+        // Update state
+        recordingState = {
+            isRecording: true,
+            currentSessionId: sessionId,
+            tabId: tab.id,
+            startTime: Date.now() // Track start time for global timer sync
+        };
+
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['recording-widget.js', 'cursor-tracker.js']
+            });
+        } catch (e) {
+            console.log('[Background] Widget script injection skipped:', e.message);
+        }
+
+        await broadcastToAllTabs({
+            type: 'START_TRACKING',
+            sessionId: sessionId,
+            startTime: recordingState.startTime
+        });
+
+        sendResponse({ success: true, sessionId, segmentId });
+    } catch (error) {
+        console.error('Error resuming recording:', error);
+        recordingState = { isRecording: false, currentSessionId: null, tabId: null };
         sendResponse({ success: false, error: error.message });
     }
 }

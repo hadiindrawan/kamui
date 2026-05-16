@@ -152,7 +152,7 @@ export default function Popup() {
     async function handleRecover(recordingId) {
         if (!confirm('Recover this interrupted recording?')) return;
         try {
-            const { saveRecording, getChunks, getRecording } = await import('../../storage/indexeddb.js');
+            const { updateRecording, getChunks, getEventLogs } = await import('../../storage/indexeddb.js');
             const chunks = await getChunks(recordingId);
             
             if (chunks.length === 0) {
@@ -160,21 +160,50 @@ export default function Popup() {
                 return;
             }
 
-            // Estimate duration and finalize
-            const recording = {
-                id: recordingId,
-                startTime: chunks[0].timestamp,
-                duration: Math.round((chunks[chunks.length - 1].timestamp - chunks[0].timestamp) / 1000),
-                mimeType: 'video/webm',
-                events: [] // Unfortunately events might be lost if not committed
-            };
+            const events = await getEventLogs(recordingId);
 
-            await saveRecording(recording);
+            // Estimate duration and finalize
+            await updateRecording(recordingId, {
+                status: 'completed',
+                duration: Math.round((chunks[chunks.length - 1].timestamp - chunks[0].timestamp) / 1000),
+                events: events || []
+            });
+
             alert('Successfully recovered! You can now open it in the editor.');
             loadRecordings();
         } catch (e) {
             console.error('Error recovering:', e);
             alert('Failed to recover recording');
+        }
+    }
+
+    async function handleResume(recordingId) {
+        if (isRecording) {
+            alert('A recording is already in progress.');
+            return;
+        }
+        try {
+            const { getChunks } = await import('../../storage/indexeddb.js');
+            const chunks = await getChunks(recordingId);
+            const segments = new Set(chunks.map(c => c.segmentId || 1));
+            const nextSegmentId = segments.size + 1;
+
+            const response = await chrome.runtime.sendMessage({
+                type: 'RESUME_RECORDING',
+                sessionId: recordingId,
+                segmentId: nextSegmentId,
+                micEnabled: micEnabled,
+                quality: quality
+            });
+            if (response.success) {
+                setIsRecording(true);
+                setCurrentSessionId(recordingId);
+            } else {
+                alert('Failed to resume recording: ' + response.error);
+            }
+        } catch (error) {
+            console.error('Error resuming recording:', error);
+            alert('Error: ' + error.message);
         }
     }
 
@@ -283,6 +312,7 @@ export default function Popup() {
                         onDelete={handleDelete}
                         onOpen={handleOpenEditor}
                         onRecover={handleRecover}
+                        onResume={handleResume}
                     />
                 )}
             </div>
