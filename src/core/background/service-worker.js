@@ -128,7 +128,7 @@ async function handleStopRecording(message, sender, sendResponse) {
 
         // Open editor page in new tab
         await chrome.tabs.create({
-            url: `src/editor/index.html?id=${recordingId}`
+            url: `src/features/editor/index.html?id=${recordingId}`
         });
 
         sendResponse({ success: true, sessionId, recordingId });
@@ -150,7 +150,7 @@ async function createOffscreenDocument() {
 
     // Create offscreen document
     await chrome.offscreen.createDocument({
-        url: 'src/offscreen/index.html',
+        url: 'src/core/offscreen/index.html',
         reasons: ['USER_MEDIA'],
         justification: 'Recording screen and audio'
     });

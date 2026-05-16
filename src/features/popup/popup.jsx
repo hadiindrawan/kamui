@@ -180,13 +180,13 @@ export default function Popup() {
 
     function handleOpenEditor(recordingId) {
         chrome.tabs.create({
-            url: chrome.runtime.getURL(`src/editor/index.html?id=${recordingId}`)
+            url: chrome.runtime.getURL(`src/features/editor/index.html?id=${recordingId}`)
         });
     }
 
     function handleOpenStandaloneEditor() {
         chrome.tabs.create({
-            url: chrome.runtime.getURL(`src/editor/index.html`)
+            url: chrome.runtime.getURL(`src/features/editor/index.html`)
         });
     }
 
