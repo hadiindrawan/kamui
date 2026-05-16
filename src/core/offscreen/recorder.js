@@ -1,9 +1,11 @@
-import { saveRecording, updateRecording, saveChunk, getChunks } from '../../storage/indexeddb.js';
+import { saveRecording, updateRecording, saveChunk, getChunks, saveEventLogs, getRecording } from '../../storage/indexeddb.js';
 
 let mediaRecorder = null;
 let currentSessionId = null;
+let currentSegmentId = 1;
 let currentThumbnail = null;
 let eventLog = [];
+let eventFlushInterval = null;
 let audioContext = null;
 let mixedStream = null;
 let globalDisplayStream = null;
@@ -14,7 +16,7 @@ let currentQuality = 'best-quality';
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case 'OFFSCREEN_START_RECORDING':
-            startRecording(message.sessionId, message.tabId, message.micEnabled, message.quality)
+            startRecording(message.sessionId, message.tabId, message.micEnabled, message.quality, message.segmentId || 1)
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true;
@@ -41,11 +43,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-async function startRecording(sessionId, tabId, micEnabled = false, quality = 'best-quality') {
+async function startRecording(sessionId, tabId, micEnabled = false, quality = 'best-quality', segmentId = 1) {
     currentSessionId = sessionId;
+    currentSegmentId = segmentId;
     currentQuality = quality;
     eventLog = [];
     recordingStartTime = Date.now();
+
+    // 0. VITAL: Save initial metadata with "in-progress" status for Zero-Loss recovery
+    if (segmentId === 1) {
+        await saveRecording({
+            id: currentSessionId,
+            status: 'in-progress',
+            videoBlob: null,
+            events: [],
+            startTime: recordingStartTime,
+            quality: currentQuality
+        }).catch(err => console.error('[Recorder] Initial save error:', err));
+    } else {
+        // Mark as in-progress if resuming
+        await updateRecording(currentSessionId, { status: 'in-progress' })
+            .catch(err => console.error('[Recorder] Resume save error:', err));
+    }
+    
+    // Setup incremental flush for tracking events
+    eventFlushInterval = setInterval(() => {
+        if (eventLog.length > 0) {
+            const batch = [...eventLog];
+            eventLog = []; // clear to accept new
+            saveEventLogs(currentSessionId, currentSegmentId, batch).catch(err => {
+                console.error('[Recorder] Event flush failed:', err);
+                eventLog = batch.concat(eventLog); // Put back on failure
+            });
+        }
+    }, 5000);
 
     try {
         // 1. IMPROVED: Dynamic constraints based on quality preference
@@ -139,7 +170,7 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
             if (e.data.size > 0) {
                 // 1. PERSIST IMMEDIATELY to IndexedDB for safety/crash-protection
                 // This ensures that even if the tab crashes or user closes it, data is safe.
-                saveChunk(currentSessionId, e.data).catch(err => {
+                saveChunk(currentSessionId, e.data, currentSegmentId).catch(err => {
                     console.error('[Recorder] Failed to save chunk to IDB:', err);
                 });
                 
@@ -149,6 +180,14 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
         };
 
         mediaRecorder.onstop = async () => {
+            if (eventFlushInterval) {
+                clearInterval(eventFlushInterval);
+                eventFlushInterval = null;
+            }
+            if (eventLog.length > 0) {
+                await saveEventLogs(currentSessionId, currentSegmentId, eventLog).catch(e => console.error(e));
+                eventLog = [];
+            }
             await saveRecordingData();
 
             // Clean up
@@ -254,6 +293,14 @@ async function stopRecording() {
         const recordingId = currentSessionId;
 
         mediaRecorder.onstop = async () => {
+            if (eventFlushInterval) {
+                clearInterval(eventFlushInterval);
+                eventFlushInterval = null;
+            }
+            if (eventLog.length > 0) {
+                await saveEventLogs(currentSessionId, currentSegmentId, eventLog).catch(e => console.error(e));
+                eventLog = [];
+            }
             await saveRecordingData();
 
             // Clean up ALL media streams and tracks
@@ -284,33 +331,26 @@ async function stopRecording() {
 }
 
 async function saveRecordingData() {
-    // Zero-Memory Saving: Note that we NO LONGER create a massive Blob here.
-    // The main 'videoBlob' will be null in the initial DB entry.
-    // The Editor/Player will re-hydrate the full blob on-demand from the consistent chunks in IDB.
-
-    const recording = {
-        id: currentSessionId,
-        videoBlob: null, // Avoid OOM. Re-hydrated by storage/indexeddb.js when needed.
-        events: eventLog,
-        startTime: recordingStartTime,
-        duration: (Date.now() - recordingStartTime) / 1000,
-        resolution: {
-            width: 1920,
-            height: 1080
-        },
-        mimeType: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'video/webm',
-        thumbnail: currentThumbnail,
-        quality: currentQuality
-    };
+    if (!currentSessionId) return;
 
     try {
-        await saveRecording(recording);
-        console.log(`[Recorder] Final session saved: ${currentSessionId}, Duration: ${recording.duration.toFixed(1)}s`);
+        const existing = await getRecording(currentSessionId, false);
+        const addedDuration = (Date.now() - recordingStartTime) / 1000;
+        const newDuration = (existing && existing.duration ? existing.duration : 0) + addedDuration;
+
+        await updateRecording(currentSessionId, {
+            status: 'completed',
+            duration: newDuration,
+            resolution: { width: 1920, height: 1080 },
+            mimeType: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'video/webm',
+            thumbnail: currentThumbnail || (existing ? existing.thumbnail : null)
+        });
+        console.log(`[Recorder] Final session saved: ${currentSessionId}, Total Duration: ${newDuration.toFixed(1)}s`);
     } catch (err) {
         console.error('[Recorder] Failed to persist final session metadata:', err);
     }
 
     // Reset
-    eventLog = [];
     currentSessionId = null;
+    currentSegmentId = 1;
 }
