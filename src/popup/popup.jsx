@@ -16,7 +16,7 @@ import {
 import RecordingsList from './RecordingsList';
 import './popup.css';
 
-function Popup() {
+export default function Popup() {
     const [isRecording, setIsRecording] = useState(false);
     const [recordings, setRecordings] = useState([]);
     const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -184,6 +184,12 @@ function Popup() {
         });
     }
 
+    function handleOpenStandaloneEditor() {
+        chrome.tabs.create({
+            url: chrome.runtime.getURL(`src/editor/index.html`)
+        });
+    }
+
     return (
         <div className="popup">
             <header className="header">
@@ -196,10 +202,16 @@ function Popup() {
 
             <div className="controls">
                 {!isRecording ? (
-                    <button className="btn btn-primary" onClick={handleStartRecording}>
-                        <Circle size={16} fill="currentColor" />
-                        Start Recording
-                    </button>
+                    <>
+                        <button className="btn btn-primary" onClick={handleStartRecording}>
+                            <Circle size={16} fill="currentColor" />
+                            Start Recording
+                        </button>
+                        <button className="btn btn-secondary" onClick={handleOpenStandaloneEditor} style={{ marginTop: '8px', background: '#2a2a2a', color: 'white', border: '1px solid #444' }}>
+                            <FolderOpen size={16} />
+                            Upload Video
+                        </button>
+                    </>
                 ) : (
                     <div className="recording-status">
                         <button className="btn btn-danger" onClick={handleStopRecording}>
@@ -278,5 +290,8 @@ function Popup() {
     );
 }
 
-const root = createRoot(document.getElementById('root'));
-root.render(<Popup />);
+const rootElement = document.getElementById('root');
+if (rootElement) {
+    const root = createRoot(rootElement);
+    root.render(<Popup />);
+}

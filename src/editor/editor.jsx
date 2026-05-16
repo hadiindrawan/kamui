@@ -11,7 +11,7 @@ import CanvasPlayer from './CanvasPlayer.jsx';
 import Timeline from './Timeline.jsx';
 import './editor.css';
 
-function Editor() {
+export default function Editor() {
     const [recording, setRecording] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -159,7 +159,10 @@ function Editor() {
             const params = new URLSearchParams(window.location.search);
             const recordingId = params.get('id');
 
-            if (!recordingId) throw new Error('No recording ID provided');
+            if (!recordingId) {
+                setLoading(false);
+                return;
+            }
 
             const { getRecording } = await import('../storage/indexeddb.js');
             const rec = await getRecording(recordingId);
@@ -214,6 +217,52 @@ function Editor() {
             setLoading(false);
         }
     }
+
+    const handleFileUpload = async (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer ? e.dataTransfer.files[0] : e.target.files[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('video/')) {
+            alert('Please upload a valid video file (.webm, .mp4, .mov).');
+            return;
+        }
+
+        if (file.size > 2 * 1024 * 1024 * 1024) { // 2GB limit
+            alert('File is too large. Please upload a file smaller than 2GB.');
+            return;
+        }
+
+        setLoading(true);
+
+        try {
+            const { saveRecording, saveChunk } = await import('../storage/indexeddb.js');
+            const newId = `upload_${Date.now()}`;
+            
+            // Save the file as a chunk
+            await saveChunk(newId, file);
+
+            // Construct recording object
+            const newRecording = {
+                id: newId,
+                startTime: Date.now(),
+                duration: 0, // Will be calculated by video player
+                mimeType: file.type,
+                events: [], // Empty events for uploaded videos
+                size: file.size,
+                isUploaded: true
+            };
+
+            await saveRecording(newRecording);
+            
+            // Redirect
+            window.location.search = `?id=${newId}`;
+        } catch (err) {
+            console.error('Upload failed:', err);
+            setError('Upload failed: ' + err.message);
+            setLoading(false);
+        }
+    };
 
     const handlePlayPause = useCallback(() => {
         setIsPlaying(!isPlaying);
@@ -658,11 +707,50 @@ function Editor() {
     // We only show overlay if Position Mode is Fixed
     const showZoomOverlay = selectedSegment && selectedSegment.positionMode === 'fixed';
 
+    const urlParams = new URLSearchParams(window.location.search);
+    const hasRecordingId = !!urlParams.get('id');
+
     if (loading) {
         return (
             <div className="editor-loading">
                 <div className="spinner"></div>
                 <p>Loading recording...</p>
+            </div>
+        );
+    }
+
+    if (!hasRecordingId) {
+        return (
+            <div className="editor">
+                <header className="editor-header">
+                    <div className="header-left">
+                        <h1 className="header-title">
+                            <Film size={22} />
+                            Beunta Editor
+                        </h1>
+                    </div>
+                </header>
+                <main className="editor-upload-main">
+                    <div 
+                        className="upload-dropzone"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleFileUpload}
+                    >
+                        <HardDrive size={48} className="upload-icon" />
+                        <h2>Upload a Local Video</h2>
+                        <p>Drag and drop a .webm, .mp4, or .mov file here</p>
+                        <input 
+                            type="file" 
+                            id="file-upload" 
+                            accept="video/webm, video/mp4, video/quicktime" 
+                            onChange={handleFileUpload} 
+                            style={{ display: 'none' }} 
+                        />
+                        <label htmlFor="file-upload" className="btn btn-primary" style={{ marginTop: '20px', cursor: 'pointer', display: 'inline-flex', padding: '10px 20px', background: '#FE6D73', color: 'white', borderRadius: '8px' }}>
+                            Select File
+                        </label>
+                    </div>
+                </main>
             </div>
         );
     }
@@ -1273,5 +1361,8 @@ function Editor() {
     );
 }
 
-const root = createRoot(document.getElementById('root'));
-root.render(<Editor />);
+const rootElement = document.getElementById('root');
+if (rootElement) {
+    const root = createRoot(rootElement);
+    root.render(<Editor />);
+}
