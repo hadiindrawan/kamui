@@ -4,13 +4,14 @@ import { Rnd } from 'react-rnd';
 import {
     Film, Play, Pause, SkipBack, SkipForward,
     Download, Zap, HardDrive, Settings,
-    ZoomIn, Gauge, Scissors, Lock, MousePointer2
+    ZoomIn, Gauge, Scissors, Lock, MousePointer2,
+    Volume2, VolumeX
 } from 'lucide-react';
 import CanvasPlayer from './CanvasPlayer.jsx';
 import Timeline from './Timeline.jsx';
 import './editor.css';
 
-function Editor() {
+export default function Editor() {
     const [recording, setRecording] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -41,6 +42,8 @@ function Editor() {
     const [insetPadding, setInsetPadding] = useState(40);
     const [showShadow, setShowShadow] = useState(true);
     const [showBorder, setShowBorder] = useState(false);
+    const [borderRadius, setBorderRadius] = useState(12);
+    const [isMuted, setIsMuted] = useState(false);
     const [showFollowCursor, setShowFollowCursor] = useState(false);
 
     // Trim
@@ -156,7 +159,10 @@ function Editor() {
             const params = new URLSearchParams(window.location.search);
             const recordingId = params.get('id');
 
-            if (!recordingId) throw new Error('No recording ID provided');
+            if (!recordingId) {
+                setLoading(false);
+                return;
+            }
 
             const { getRecording } = await import('../storage/indexeddb.js');
             const rec = await getRecording(recordingId);
@@ -199,6 +205,8 @@ function Editor() {
                 if (settings.insetPadding !== undefined) setInsetPadding(settings.insetPadding);
                 if (settings.showShadow !== undefined) setShowShadow(settings.showShadow);
                 if (settings.showBorder !== undefined) setShowBorder(settings.showBorder);
+                if (settings.borderRadius !== undefined) setBorderRadius(settings.borderRadius);
+                if (settings.isMuted !== undefined) setIsMuted(settings.isMuted);
                 if (settings.trimStart !== undefined) setTrimStart(settings.trimStart);
                 if (settings.trimEnd !== undefined) setTrimEnd(settings.trimEnd);
             }
@@ -209,6 +217,52 @@ function Editor() {
             setLoading(false);
         }
     }
+
+    const handleFileUpload = async (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer ? e.dataTransfer.files[0] : e.target.files[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('video/')) {
+            alert('Please upload a valid video file (.webm, .mp4, .mov).');
+            return;
+        }
+
+        if (file.size > 2 * 1024 * 1024 * 1024) { // 2GB limit
+            alert('File is too large. Please upload a file smaller than 2GB.');
+            return;
+        }
+
+        setLoading(true);
+
+        try {
+            const { saveRecording, saveChunk } = await import('../storage/indexeddb.js');
+            const newId = `upload_${Date.now()}`;
+            
+            // Save the file as a chunk
+            await saveChunk(newId, file);
+
+            // Construct recording object
+            const newRecording = {
+                id: newId,
+                startTime: Date.now(),
+                duration: 0, // Will be calculated by video player
+                mimeType: file.type,
+                events: [], // Empty events for uploaded videos
+                size: file.size,
+                isUploaded: true
+            };
+
+            await saveRecording(newRecording);
+            
+            // Redirect
+            window.location.search = `?id=${newId}`;
+        } catch (err) {
+            console.error('Upload failed:', err);
+            setError('Upload failed: ' + err.message);
+            setLoading(false);
+        }
+    };
 
     const handlePlayPause = useCallback(() => {
         setIsPlaying(!isPlaying);
@@ -240,6 +294,9 @@ function Editor() {
             const clampedTime = Math.max(0, Math.min(duration, time));
             setCurrentTime(clampedTime);
             setIsPlaying(false);
+            if (canvasPlayerRef.current) {
+                canvasPlayerRef.current.seekTo(clampedTime);
+            }
         }
     }, [duration]);
 
@@ -247,6 +304,9 @@ function Editor() {
         const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
         if (Number.isFinite(newTime)) {
             setCurrentTime(newTime);
+            if (canvasPlayerRef.current) {
+                canvasPlayerRef.current.seekTo(newTime);
+            }
         }
     }, [currentTime, duration]);
 
@@ -368,6 +428,8 @@ function Editor() {
                         insetPadding,
                         showShadow,
                         showBorder,
+                        borderRadius,
+                        isMuted,
                         trimStart,
                         trimEnd
                     }
@@ -378,10 +440,10 @@ function Editor() {
         }
 
         // Force re-render by seeking to current position
-        const pos = currentTime;
-        setCurrentTime(0);
-        setTimeout(() => setCurrentTime(pos), 10);
-    }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, playbackSpeed, aspectRatio, backgroundColor, trimStart, trimEnd]);
+        if (canvasPlayerRef.current) {
+            canvasPlayerRef.current.seekTo(currentTime);
+        }
+    }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, playbackSpeed, aspectRatio, backgroundColor, trimStart, trimEnd, borderRadius, isMuted]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -475,6 +537,7 @@ function Editor() {
                     trimStart,
                     trimEnd,
                     playbackSpeed,
+                    isMuted,
                     exportQuality, // Pass quality for FFmpeg conversion
                     exportScale, // Pass scale for resolution upscaling
                     format: exportFormat,
@@ -487,6 +550,7 @@ function Editor() {
                     insetPadding,
                     showShadow,
                     showBorder,
+                    borderRadius,
                     showFollowCursor,
                     ...quality
                 },
@@ -643,11 +707,50 @@ function Editor() {
     // We only show overlay if Position Mode is Fixed
     const showZoomOverlay = selectedSegment && selectedSegment.positionMode === 'fixed';
 
+    const urlParams = new URLSearchParams(window.location.search);
+    const hasRecordingId = !!urlParams.get('id');
+
     if (loading) {
         return (
             <div className="editor-loading">
                 <div className="spinner"></div>
                 <p>Loading recording...</p>
+            </div>
+        );
+    }
+
+    if (!hasRecordingId) {
+        return (
+            <div className="editor">
+                <header className="editor-header">
+                    <div className="header-left">
+                        <h1 className="header-title">
+                            <Film size={22} />
+                            Beunta Editor
+                        </h1>
+                    </div>
+                </header>
+                <main className="editor-upload-main">
+                    <div 
+                        className="upload-dropzone"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleFileUpload}
+                    >
+                        <HardDrive size={48} className="upload-icon" />
+                        <h2>Upload a Local Video</h2>
+                        <p>Drag and drop a .webm, .mp4, or .mov file here</p>
+                        <input 
+                            type="file" 
+                            id="file-upload" 
+                            accept="video/webm, video/mp4, video/quicktime" 
+                            onChange={handleFileUpload} 
+                            style={{ display: 'none' }} 
+                        />
+                        <label htmlFor="file-upload" className="btn btn-primary" style={{ marginTop: '20px', cursor: 'pointer', display: 'inline-flex', padding: '10px 20px', background: '#FE6D73', color: 'white', borderRadius: '8px' }}>
+                            Select File
+                        </label>
+                    </div>
+                </main>
             </div>
         );
     }
@@ -695,7 +798,7 @@ function Editor() {
             </header>
 
             <main className="editor-main">
-                <div className="canvas-section">
+                <div className="canvas-section" onClick={() => setSelectedSegmentId(null)}>
                     <div className="canvas-container" ref={canvasContainerRef}>
                         <CanvasPlayer
                             ref={canvasPlayerRef}
@@ -715,6 +818,8 @@ function Editor() {
                             insetPadding={insetPadding}
                             showShadow={showShadow}
                             showBorder={showBorder}
+                            borderRadius={borderRadius}
+                            isMuted={isMuted}
                             showFollowCursor={showFollowCursor}
                             onTimeUpdate={handleTimeUpdate}
                             onDurationChange={handleDurationChange}
@@ -1074,6 +1179,24 @@ function Editor() {
                                         <span>Border</span>
                                     </label>
                                 </div>
+                                <div className="setting-row">
+                                    <div className="setting-label">
+                                        <span>Border Radius</span>
+                                        <span className="setting-value">{borderRadius}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        className="setting-slider"
+                                        min="0"
+                                        max="100"
+                                        step="4"
+                                        value={borderRadius}
+                                        onChange={(e) => {
+                                            setBorderRadius(parseInt(e.target.value));
+                                            setHasPendingEdits(true);
+                                        }}
+                                    />
+                                </div>
                             </>
                         )}
 
@@ -1169,6 +1292,13 @@ function Editor() {
                     <button className="btn-control btn-small" onClick={() => handleSkip(5)}>
                         <SkipForward size={18} />
                     </button>
+                    <button 
+                        className="btn-control btn-small" 
+                        onClick={() => setIsMuted(!isMuted)}
+                        title={isMuted ? "Unmute" : "Mute"}
+                    >
+                        {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                    </button>
                 </div>
 
                 <div className="export-controls">
@@ -1231,5 +1361,8 @@ function Editor() {
     );
 }
 
-const root = createRoot(document.getElementById('root'));
-root.render(<Editor />);
+const rootElement = document.getElementById('root');
+if (rootElement) {
+    const root = createRoot(rootElement);
+    root.render(<Editor />);
+}

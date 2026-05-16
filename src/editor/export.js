@@ -81,9 +81,11 @@ export async function exportVideoMP4(recording, settings, onProgress) {
             
             // Add audio to legacy stream
             try {
-                const videoStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
-                if (videoStream && videoStream.getAudioTracks().length > 0) {
-                    stream.addTrack(videoStream.getAudioTracks()[0]);
+                if (!settings.isMuted) {
+                    const videoStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
+                    if (videoStream && videoStream.getAudioTracks().length > 0) {
+                        stream.addTrack(videoStream.getAudioTracks()[0]);
+                    }
                 }
             } catch (e) {}
 
@@ -344,7 +346,7 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
                 return canvas;
             }
         },
-        audio: { 
+        audio: settings.isMuted ? { discard: true } : { 
             codec: 'aac'
         }
     });
@@ -455,7 +457,7 @@ function drawExportFrame(ctx, source, timestampMs, params) {
     const { 
         canvasW, canvasH, videoW, videoH, videoRectX, videoRectY, videoRectW, videoRectH,
         backgroundMode, backgroundBuffer,
-        showShadow, showBorder, camera, events 
+        showShadow, showBorder, borderRadius = 0, camera, events 
     } = params;
 
     ctx.save();
@@ -466,12 +468,32 @@ function drawExportFrame(ctx, source, timestampMs, params) {
     // Use pre-rendered buffer for background (fast!)
     ctx.drawImage(backgroundBuffer, 0, 0);
 
+    // 2. Draw Video
+    // Calculate effective radius based on the visual width of the video in the scene
+    const scale = videoRectW / videoW;
+    const vRadius = Math.max(0, (borderRadius || 0) * scale);
+
     if (backgroundMode !== 'hidden' && showShadow) {
+        ctx.save();
         ctx.fillStyle = 'black';
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         ctx.shadowBlur = 40; ctx.shadowOffsetY = 20;
-        ctx.fillRect(videoRectX, videoRectY, videoRectW, videoRectH);
-        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+        
+        if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(videoRectX, videoRectY, videoRectW, videoRectH, vRadius);
+            ctx.fill();
+        } else {
+            ctx.fillRect(videoRectX, videoRectY, videoRectW, videoRectH);
+        }
+        ctx.restore();
+    }
+
+    ctx.save();
+    if (vRadius > 0 && ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(videoRectX, videoRectY, videoRectW, videoRectH, vRadius);
+        ctx.clip();
     }
 
     // Direct draw (compatible with both VideoElement and VideoSample)
@@ -480,11 +502,18 @@ function drawExportFrame(ctx, source, timestampMs, params) {
     } else {
         ctx.drawImage(source, 0, 0, videoW, videoH, videoRectX, videoRectY, videoRectW, videoRectH);
     }
+    ctx.restore();
 
     if (backgroundMode !== 'hidden' && showBorder) {
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 2;
-        ctx.strokeRect(videoRectX, videoRectY, videoRectW, videoRectH);
+        if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(videoRectX, videoRectY, videoRectW, videoRectH, vRadius);
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(videoRectX, videoRectY, videoRectW, videoRectH);
+        }
     }
 
     drawSceneOverlays(ctx, timestampMs, events, canvasW, canvasH);
