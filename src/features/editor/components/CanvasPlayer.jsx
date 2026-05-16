@@ -27,14 +27,16 @@ const CanvasPlayer = forwardRef(({
     isMuted = false
 }, ref) => {
     const canvasRef = useRef(null);
-    const videoRef = useRef(null);
-    const videoUrlRef = useRef(null); // Track ObjectURL for revocation
+    const videoRefs = useRef([]);
+    const [activeVideoIndex, setActiveVideoIndex] = useState(0);
+    const [segmentDurations, setSegmentDurations] = useState([]);
+    const videoUrlsRef = useRef([]); // Track ObjectURL for revocation
     const lastRecordingIdRef = useRef(null); // Fix: Prevent redundant setup
     const rafRef = useRef(null);
     const lastCameraRef = useRef(null);
     const clickAnimationsRef = useRef([]);
     const containerRef = useRef(null);
-    const backgroundImageRef = useRef(null); 
+    const backgroundImageRef = useRef(null);
     const backgroundBufferRef = useRef(null); // Cache blurred/rendered background
     const [isHoveringVideo, setIsHoveringVideo] = useState(false);
     const [isDraggingProgress, setIsDraggingProgress] = useState(false);
@@ -43,19 +45,51 @@ const CanvasPlayer = forwardRef(({
     const [metadataReady, setMetadataReady] = useState(false);
 
     useImperativeHandle(ref, () => ({
-        getCurrentTime: () => videoRef.current?.currentTime || 0,
+        getCurrentTime: () => {
+            const video = videoRefs.current[activeVideoIndex];
+            if (!video) return 0;
+            let globalTime = video.currentTime || 0;
+            for (let i = 0; i < activeVideoIndex; i++) {
+                globalTime += segmentDurations[i] || 0;
+            }
+            return globalTime;
+        },
         seekTo: (time) => {
-            if (videoRef.current && Number.isFinite(time)) {
-                videoRef.current.currentTime = time;
+            if (!Number.isFinite(time) || segmentDurations.length === 0) return;
+            let accumulated = 0;
+            let targetIdx = 0;
+            let localTime = time;
+
+            for (let i = 0; i < segmentDurations.length; i++) {
+                if (time <= accumulated + segmentDurations[i] || i === segmentDurations.length - 1) {
+                    targetIdx = i;
+                    localTime = time - accumulated;
+                    break;
+                }
+                accumulated += segmentDurations[i];
+            }
+
+            videoRefs.current.forEach((v, i) => {
+                if (v && i !== targetIdx && !v.paused) v.pause();
+            });
+
+            if (activeVideoIndex !== targetIdx) {
+                setActiveVideoIndex(targetIdx);
+            }
+
+            const targetVideo = videoRefs.current[targetIdx];
+            if (targetVideo) {
+                targetVideo.currentTime = localTime;
+                if (isPlaying) {
+                    targetVideo.play().catch(e => console.warn(e));
+                }
             }
         }
     }));
 
     // Sync muted state
     useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.muted = isMuted;
-        }
+        videoRefs.current.forEach(v => { if (v) v.muted = isMuted; });
     }, [isMuted]);
 
     // Load background image when needed
@@ -78,7 +112,7 @@ const CanvasPlayer = forwardRef(({
 
     // Pre-calculate Scene Layout and Map Events (Memoized for Performance)
     const sceneLayout = React.useMemo(() => {
-        const video = videoRef.current;
+        const video = videoRefs.current[0];
         if (!video || !video.videoWidth) return null;
 
         const videoW = video.videoWidth;
@@ -139,7 +173,7 @@ const CanvasPlayer = forwardRef(({
 
         if (showFollowCursor && recording?.events) {
             const followEvents = recording.events.filter(e => e.type === 'follow' || e.type === 'move');
-            
+
             // Fix: Avoid spread operator on large arrays which can hit stack limits
             for (const e of followEvents) {
                 mappedEvents.push({
@@ -150,10 +184,10 @@ const CanvasPlayer = forwardRef(({
             }
         }
 
-        return { 
-            width, height, 
-            videoW, videoH, 
-            vX, vY, vW, vH, 
+        return {
+            width, height,
+            videoW, videoH,
+            vX, vY, vW, vH,
             events: mappedEvents,
             cameraConfig: {
                 videoWidth: width, videoHeight: height,
@@ -201,13 +235,13 @@ const CanvasPlayer = forwardRef(({
     const refreshBackground = () => {
         if (!sceneLayout) return;
         const { width, height } = sceneLayout;
-        
+
         if (!backgroundBufferRef.current) {
-            backgroundBufferRef.current = typeof OffscreenCanvas !== 'undefined' 
-                ? new OffscreenCanvas(width, height) 
+            backgroundBufferRef.current = typeof OffscreenCanvas !== 'undefined'
+                ? new OffscreenCanvas(width, height)
                 : document.createElement('canvas');
         }
-        
+
         const buffer = backgroundBufferRef.current;
         if (buffer.width !== width || buffer.height !== height) {
             buffer.width = width;
@@ -259,35 +293,30 @@ const CanvasPlayer = forwardRef(({
             // React's strict mode or minor re-renders shouldn't kill the URL
             if (!recording || recording.id !== lastRecordingIdRef.current) {
                 if (rafRef.current) cancelAnimationFrame(rafRef.current);
-                if (videoUrlRef.current) {
-                    URL.revokeObjectURL(videoUrlRef.current);
-                    videoUrlRef.current = null;
-                }
+                videoUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+                videoUrlsRef.current = [];
             }
         };
     }, [recording?.id]); // Depend on ID instead of object reference
 
     useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.playbackRate = playbackSpeed;
-        }
+        videoRefs.current.forEach(v => { if (v) v.playbackRate = playbackSpeed; });
     }, [playbackSpeed]);
 
     useEffect(() => {
-        if (videoRef.current) {
+        const video = videoRefs.current[activeVideoIndex];
+        if (video) {
             if (isPlaying) {
-                // Fix: Check readyState (2 = HAVE_CURRENT_DATA) before playing to avoid NotSupportedError
-                if (videoRef.current.readyState >= 2) {
-                    videoRef.current.play().catch(e => console.warn('Play error:', e));
+                if (video.readyState >= 2) {
+                    video.play().catch(e => console.warn('Play error:', e));
                 } else {
-                    // Wait for metadata/load if needed
-                    videoRef.current.addEventListener('canplay', () => {
-                        if (isPlaying) videoRef.current.play().catch(e => console.warn('Play error:', e));
+                    video.addEventListener('canplay', () => {
+                        if (isPlaying) video.play().catch(e => console.warn('Play error:', e));
                     }, { once: true });
                 }
                 renderLoop();
             } else {
-                videoRef.current.pause();
+                videoRefs.current.forEach(v => { if (v && !v.paused) v.pause(); });
                 if (rafRef.current) {
                     cancelAnimationFrame(rafRef.current);
                 }
@@ -297,17 +326,31 @@ const CanvasPlayer = forwardRef(({
 
     useEffect(() => {
         // Sync video currentTime with prop when paused
-        if (videoRef.current && !isPlaying && Number.isFinite(currentTime)) {
-            const diff = Math.abs(videoRef.current.currentTime - currentTime);
-            if (diff > 0.05) { // 50ms threshold to prevent loops
-                videoRef.current.currentTime = currentTime;
+        if (!isPlaying && Number.isFinite(currentTime) && segmentDurations.length > 0) {
+            let accumulated = 0;
+            let targetIdx = 0;
+            let localTime = currentTime;
+            for (let i = 0; i < segmentDurations.length; i++) {
+                if (currentTime <= accumulated + segmentDurations[i] || i === segmentDurations.length - 1) {
+                    targetIdx = i;
+                    localTime = currentTime - accumulated;
+                    break;
+                }
+                accumulated += segmentDurations[i];
+            }
+            if (activeVideoIndex !== targetIdx) setActiveVideoIndex(targetIdx);
+            const video = videoRefs.current[targetIdx];
+            if (video) {
+                const diff = Math.abs(video.currentTime - localTime);
+                if (diff > 0.05) video.currentTime = localTime;
             }
         }
+
     }, [currentTime, isPlaying]);
 
     useEffect(() => {
         // Force re-render when display properties change while paused
-        if (videoRef.current && !isPlaying) {
+        if (videoRefs.current[activeVideoIndex] && !isPlaying) {
             renderFrame();
         }
     }, [
@@ -319,87 +362,81 @@ const CanvasPlayer = forwardRef(({
     ]);
 
     async function setupVideo() {
-        if (!videoRef.current || !recording?.videoBlob) return;
-        const video = videoRef.current;
-        
-        // Final guard against redundant setup
+        const blobs = recording?.videoBlobs || (recording?.videoBlob ? [recording.videoBlob] : []);
+        if (blobs.length === 0) return;
+
         if (recording.id === lastRecordingIdRef.current) return;
         lastRecordingIdRef.current = recording.id;
 
-        // Revoke old URL if exists
-        if (videoUrlRef.current) {
-            URL.revokeObjectURL(videoUrlRef.current);
-        }
+        videoUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+        videoUrlsRef.current = [];
+        setMetadataReady(false);
 
-        setMetadataReady(false); // Reset for new video
-        const videoUrl = URL.createObjectURL(recording.videoBlob);
-        videoUrlRef.current = videoUrl;
+        const durations = new Array(blobs.length).fill(0);
+        let loadedCount = 0;
 
-        // 1. Attach listeners FIRST (before setting src) to avoid missing fast-cached events
-        video.onerror = (e) => {
-            console.error('[CanvasPlayer] Video Error:', video.error || e);
-        };
+        blobs.forEach((blob, idx) => {
+            const videoUrl = URL.createObjectURL(blob);
+            videoUrlsRef.current.push(videoUrl);
 
-        video.onloadedmetadata = () => {
-            console.log('[CanvasPlayer] Metadata loaded:', video.videoWidth, 'x', video.videoHeight);
-            setMetadataReady(true);
-            
-            // Priority 1: Browser reported duration
-            let actualDuration = video.duration;
+            // Give react time to render the video tags if they don't exist yet
+            setTimeout(() => {
+                const video = videoRefs.current[idx];
+                if (!video) return;
 
-            // Fallback for WebM Infinity
-            if (!Number.isFinite(video.duration)) {
-                if (recording?.events && recording.events.length > 0) {
-                    // Fix: Avoid spread operator on large arrays which can hit stack limits
-                    const maxEventTime = recording.events.reduce((max, e) => Math.max(max, e.time || 0), 0);
-                    actualDuration = maxEventTime / 1000;
-                } else {
-                    actualDuration = 10;
-                }
-            }
+                video.onerror = (e) => console.error('[CanvasPlayer] Video Error:', e);
 
-            if (Number.isFinite(actualDuration) && actualDuration > 0) {
-                onDurationChange(actualDuration);
-            }
-
-            // Sync dimensions
-            if (onVideoDimensions && video.videoWidth > 0 && video.videoHeight > 0) {
-                onVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
-                renderFrame();
-            } else {
-                // Polling fallback for certain browsers/codecs where dimensions aren't ready in onloadedmetadata
-                const checkDims = setInterval(() => {
-                    if (video.videoWidth > 0 && video.videoHeight > 0) {
-                        clearInterval(checkDims);
-                        setMetadataReady(true);
-                        onVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
-                        renderFrame();
+                video.onloadedmetadata = () => {
+                    let actualDuration = video.duration;
+                    if (!Number.isFinite(video.duration)) {
+                        if (idx === 0 && recording?.events?.length > 0) {
+                            const maxEventTime = recording.events.reduce((max, e) => Math.max(max, e.time || 0), 0);
+                            actualDuration = maxEventTime / 1000;
+                        } else {
+                            actualDuration = 10;
+                        }
                     }
-                }, 50);
-                setTimeout(() => clearInterval(checkDims), 2000); // Stop after 2s
-            }
-        };
+                    durations[idx] = actualDuration;
+                    loadedCount++;
 
-        video.oncanplay = () => {
-            if (onVideoDimensions && video.videoWidth > 0) {
-                onVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
-            }
-            renderFrame();
-        };
+                    if (loadedCount === blobs.length) {
+                        setSegmentDurations(durations);
+                        const totalDur = durations.reduce((a, b) => a + b, 0);
+                        setMetadataReady(true);
+                        onDurationChange(totalDur);
 
-        video.ontimeupdate = () => {
-            if (Number.isFinite(video.currentTime)) {
-                onTimeUpdate(video.currentTime);
-            }
-        };
+                        if (onVideoDimensions && videoRefs.current[0].videoWidth > 0) {
+                            onVideoDimensions({ width: videoRefs.current[0].videoWidth, height: videoRefs.current[0].videoHeight });
+                            renderFrame();
+                        }
+                    }
+                };
 
-        // 2. Set src and load
-        video.src = videoUrl;
-        video.load();
+                video.onended = () => {
+                    if (idx < blobs.length - 1) {
+                        setActiveVideoIndex(idx + 1);
+                        const nextVideo = videoRefs.current[idx + 1];
+                        nextVideo.currentTime = 0;
+                        if (isPlaying) nextVideo.play().catch(e => console.warn(e));
+                    }
+                };
+
+                video.ontimeupdate = () => {
+                    if (idx === activeVideoIndex && Number.isFinite(video.currentTime)) {
+                        let globalTime = video.currentTime;
+                        for (let i = 0; i < idx; i++) globalTime += durations[i] || 0;
+                        onTimeUpdate(globalTime);
+                    }
+                };
+
+                video.src = videoUrl;
+                video.load();
+            }, 0);
+        });
     }
 
     function renderLoop() {
-        if (videoRef.current && !videoRef.current.paused) {
+        if (videoRefs.current[activeVideoIndex] && !videoRefs.current[activeVideoIndex].paused) {
             renderFrame();
             rafRef.current = requestAnimationFrame(renderLoop);
         }
@@ -407,14 +444,14 @@ const CanvasPlayer = forwardRef(({
 
     function renderFrame() {
         const canvas = canvasRef.current;
-        const video = videoRef.current;
+        const video = videoRefs.current[activeVideoIndex];
         const layout = sceneLayout;
         const backgroundBuffer = backgroundBufferRef.current;
 
         if (!canvas || !video || !video.videoWidth || !layout || !backgroundBuffer) return;
 
         const ctx = canvas.getContext('2d', { alpha: false });
-        
+
         // Use prop as source of truth when paused to ensure instant feedback
         // Use video.currentTime when playing for smooth playback
         const timeToRender = isPlaying ? video.currentTime : currentTime;
@@ -451,7 +488,7 @@ const CanvasPlayer = forwardRef(({
             ctx.fillStyle = 'black';
             ctx.shadowColor = 'rgba(0,0,0,0.5)';
             ctx.shadowBlur = 40; ctx.shadowOffsetY = 20;
-            
+
             if (ctx.roundRect) {
                 ctx.beginPath();
                 ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
@@ -665,11 +702,11 @@ const CanvasPlayer = forwardRef(({
     };
 
     const handleProgressMouseMove = (e) => {
-        if (!containerRef.current || !videoRef.current) return;
+        if (!containerRef.current || segmentDurations.length === 0) return;
         const rect = containerRef.current.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const percent = Math.max(0, Math.min(1, x / rect.width));
-        const time = percent * (videoRef.current.duration || 0);
+        const time = percent * (segmentDurations.reduce((a, b) => a + b, 0) || 0);
         setHoverTime(time);
 
         if (isDraggingProgress) {
@@ -678,11 +715,11 @@ const CanvasPlayer = forwardRef(({
     };
 
     const handleProgressSeek = (e) => {
-        if (!containerRef.current || !videoRef.current) return;
+        if (!containerRef.current || segmentDurations.length === 0) return;
         const rect = containerRef.current.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const percent = Math.max(0, Math.min(1, x / rect.width));
-        const time = percent * (videoRef.current.duration || 0);
+        const time = percent * (segmentDurations.reduce((a, b) => a + b, 0) || 0);
         if (onSeek) onSeek(time);
     };
 
@@ -701,7 +738,7 @@ const CanvasPlayer = forwardRef(({
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const duration = videoRef.current?.duration || 0;
+    const duration = segmentDurations.reduce((a, b) => a + b, 0);
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
     return (
@@ -721,11 +758,14 @@ const CanvasPlayer = forwardRef(({
                 ref={canvasRef}
                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             />
-            <video
-                ref={videoRef}
-                style={{ display: 'none' }}
-                playsInline
-            />
+            {(recording?.videoBlobs || (recording?.videoBlob ? [recording.videoBlob] : [])).map((_, i) => (
+                <video
+                    key={i}
+                    ref={el => videoRefs.current[i] = el}
+                    style={{ display: 'none' }}
+                    playsInline
+                />
+            ))}
 
             {/* Video Progress Trackbar Overlay */}
             {duration > 0 && (
