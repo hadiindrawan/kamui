@@ -1,6 +1,7 @@
 // Background service worker for managing recording lifecycle
 import { createLogger } from '../../shared/utils/logger.js';
 import { isZoomWorthyClick } from '../../shared/utils/interaction-classifier.js';
+import { persistQualitySetting } from '../services/recording-service.js';
 const log = createLogger('SW');
 
 // ─── Native Bridge (inlined — MV3 service workers don't support dynamic import()) ───
@@ -8,10 +9,30 @@ const log = createLogger('SW');
 const NATIVE_HOST_NAME = 'com.beunta.native';
 let nativePort = null;
 let nativeBridgeReconnectAttempts = 0;
-const MAX_NATIVE_RECONNECT_ATTEMPTS = 3;
 const NATIVE_RECONNECT_DELAY_MS = 2000;
 
 const nativeListeners = new Map();
+
+// Mirrors chrome.storage.local's 'quality' key so APP_STATE messages to the
+// tray always have a value on hand without an async storage read on every
+// send. Seeded from storage below and kept current via storage.onChanged.
+let currentQuality = 'best-quality';
+chrome.storage.local.get(['quality']).then((result) => {
+    if (result.quality) currentQuality = result.quality;
+    sendAppStateToNative();
+});
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.quality) {
+        currentQuality = changes.quality.newValue || currentQuality;
+        sendAppStateToNative();
+    }
+});
+
+// Persisted so a popup that reopens after a native ERROR arrived (likely,
+// since starting a native recording backgrounds the popup via the
+// getDisplayMedia picker) can still learn about it via GET_STATE, not just
+// popups that happen to be open live when the message is broadcast.
+let lastNativeError = null; // { code, message, timestamp } | null
 
 function nativeBridgeConnect() {
     if (nativePort) return nativePort;
@@ -34,6 +55,32 @@ function nativeBridgeConnect() {
         if (message.type === 'TRACKING_STOPPED') {
             log.info('Native TRACKING_STOPPED received — finalizing recording.');
             finishNativeRecording().catch((e) => log.error('finishNativeRecording failed:', e));
+        }
+
+        if (message.type === 'ERROR') {
+            log.warn('Native ERROR received:', message.code, message.message);
+            lastNativeError = { code: message.code, message: message.message, timestamp: Date.now() };
+        }
+
+        // Tray-originated requests — the tray can't directly mutate extension
+        // state (no shared memory across the NativeMessaging boundary), so it
+        // asks us to do it and we echo the result back via APP_STATE.
+        if (message.type === 'REQUEST_SET_QUALITY') {
+            log.info('Native tray requested quality change:', message.quality);
+            currentQuality = message.quality;
+            persistQualitySetting(message.quality).catch((e) => log.error('Failed to persist tray-driven quality:', e));
+            sendAppStateToNative();
+        }
+
+        if (message.type === 'REQUEST_OPEN_RECORDINGS') {
+            log.info('Native tray requested Open Recordings.');
+            // tabs.create() alone only makes the tab active *within* Chrome —
+            // it doesn't bring the Chrome window itself to the OS foreground
+            // when another app currently has focus, so also explicitly focus
+            // the window the new tab landed in.
+            chrome.tabs.create({ url: chrome.runtime.getURL('src/features/recordings/index.html') })
+                .then((tab) => chrome.windows.update(tab.windowId, { focused: true }))
+                .catch((e) => log.error('Failed to open recordings page:', e));
         }
 
         // Call any registered type-specific listener (cursor/click ingestion, etc.)
@@ -62,17 +109,40 @@ function nativeBridgeConnect() {
                 .then(() => chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED', reason: 'native-disconnected' }).catch(() => {}))
                 .catch((e) => log.error('finishNativeRecording (disconnect) failed:', e));
         }
-        if (nativeBridgeReconnectAttempts < MAX_NATIVE_RECONNECT_ATTEMPTS) {
-            nativeBridgeReconnectAttempts++;
-            log.info(`Reconnect attempt ${nativeBridgeReconnectAttempts}/${MAX_NATIVE_RECONNECT_ATTEMPTS} in ${NATIVE_RECONNECT_DELAY_MS}ms`);
-            setTimeout(() => nativeBridgeConnect(), NATIVE_RECONNECT_DELAY_MS);
-        } else {
-            log.warn('Max reconnect attempts reached, giving up.');
-        }
+        // The connection is meant to be permanent (it's what keeps the
+        // branded tray icon present even when nothing is recording), so keep
+        // retrying indefinitely rather than giving up after a few attempts.
+        // If the companion app was never installed at all, connectNative()
+        // above throws synchronously instead of reaching this handler, so
+        // this loop only runs when a previously-working connection dropped
+        // (app crashed/updated) — not against a permanently-absent host.
+        nativeBridgeReconnectAttempts++;
+        log.info(`Reconnect attempt ${nativeBridgeReconnectAttempts} in ${NATIVE_RECONNECT_DELAY_MS}ms`);
+        setTimeout(() => nativeBridgeConnect(), NATIVE_RECONNECT_DELAY_MS);
     });
 
     nativeBridgeReconnectAttempts = 0;
+    sendAppStateToNative();
     return nativePort;
+}
+
+/** Pushes current recording/quality state to the native tray so it can pick
+ * the idle/recording icon and sync its Quality submenu checkmarks. No-op
+ * (silently) if the native app isn't connected. */
+function sendAppStateToNative() {
+    try {
+        nativeBridgeSend({
+            type: 'APP_STATE',
+            is_recording: recordingState.isRecording,
+            quality: currentQuality,
+            // Plain browser-mode recordings replace recordingState wholesale
+            // without a recordingMode field, so it can be undefined here —
+            // default it since the Rust side expects a non-optional String.
+            mode: recordingState.recordingMode || 'browser',
+        });
+    } catch (e) {
+        log.debug('sendAppStateToNative skipped (native not connected):', e.message);
+    }
 }
 
 function nativeBridgeDisconnect() {
@@ -132,6 +202,13 @@ let recordingState = {
     nativeConnected: false,
 };
 
+// Open the native connection immediately and keep it open for the lifetime
+// of the service worker (not just while a native-mode recording is active),
+// so the companion app's tray icon is present whenever Chrome is running.
+// No-ops silently if the companion app isn't installed (connectNative()
+// throws synchronously, caught inside nativeBridgeConnect()).
+nativeBridgeConnect();
+
 // Handle messages from popup and content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     log.debug(`→ Message received: ${message.type}`, { mode: message.recordingMode || recordingState.recordingMode, sender: sender?.id });
@@ -165,7 +242,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
 
         case 'GET_STATE':
-            sendResponse({ state: recordingState });
+            sendResponse({ state: { ...recordingState, nativeTrackerWarning: lastNativeError?.message || null } });
             break;
 
         case 'CURSOR_EVENT':
@@ -185,6 +262,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'SET_RECORDING_MODE':
             recordingState.recordingMode = message.mode; // 'browser' | 'native'
+            sendAppStateToNative();
             sendResponse({ success: true });
             break;
 
@@ -230,6 +308,7 @@ async function handleCheckNativeAvailable(message, sender, sendResponse) {
 
 async function handleNativeStartRecording(message, sender, sendResponse) {
     log.info('handleNativeStartRecording: starting browser capture + native cursor tracker...');
+    lastNativeError = null;
     try {
         const sessionId = `rec_native_${Date.now()}`;
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -257,11 +336,13 @@ async function handleNativeStartRecording(message, sender, sendResponse) {
             recordingMode: 'native',
             nativeConnected: false,
         };
+        sendAppStateToNative();
 
-        // Start the native global cursor/click tracker. Coordinates are
-        // screen-global, so this only lines up with the captured frame when
-        // the user shares "Entire Screen" in the getDisplayMedia picker.
-        nativeBridgeConnect();
+        // Register the native global cursor/click tracker on the already-open
+        // persistent connection (nativeBridgeConnect() runs once at SW
+        // startup — see above). Coordinates are screen-global, so this only
+        // lines up with the captured frame when the user shares "Entire
+        // Screen" in the getDisplayMedia picker.
         nativeBridgeOnMessage('CURSOR_POSITION', (msg) => handleNativeCursorEvent(sessionId, msg));
         nativeBridgeOnMessage('CLICK', (msg) => handleNativeClickEvent(sessionId, msg));
         try {
@@ -276,6 +357,7 @@ async function handleNativeStartRecording(message, sender, sendResponse) {
     } catch (error) {
         log.error('Native start failed:', error);
         recordingState = { isRecording: false, currentSessionId: null, tabId: null };
+        sendAppStateToNative();
         sendResponse({ success: false, error: error.message });
     }
 }
@@ -299,6 +381,7 @@ async function finishNativeRecording() {
     const recordingId = result?.recordingId || sessionId;
 
     recordingState = { isRecording: false, currentSessionId: null, tabId: null, recordingMode: 'native', nativeConnected: false };
+    sendAppStateToNative();
 
     await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
     log.info('Native recording finalized, saved as:', recordingId);
@@ -418,6 +501,7 @@ async function handleStartRecording(message, sender, sendResponse) {
             tabId: tab.id,
             startTime: Date.now()
         };
+        sendAppStateToNative();
 
         try {
             await chrome.scripting.executeScript({
@@ -439,6 +523,7 @@ async function handleStartRecording(message, sender, sendResponse) {
     } catch (error) {
         log.error('Error starting browser recording:', error);
         recordingState = { isRecording: false, currentSessionId: null, tabId: null };
+        sendAppStateToNative();
         sendResponse({ success: false, error: error.message });
     }
 }
@@ -474,6 +559,7 @@ async function handleResumeRecording(message, sender, sendResponse) {
             tabId: tab.id,
             startTime: Date.now() // Track start time for global timer sync
         };
+        sendAppStateToNative();
 
         try {
             await chrome.scripting.executeScript({
@@ -494,6 +580,7 @@ async function handleResumeRecording(message, sender, sendResponse) {
     } catch (error) {
         console.error('Error resuming recording:', error);
         recordingState = { isRecording: false, currentSessionId: null, tabId: null };
+        sendAppStateToNative();
         sendResponse({ success: false, error: error.message });
     }
 }
@@ -518,6 +605,7 @@ async function finishBrowserRecording() {
     log.info('Recording saved as:', recordingId);
 
     recordingState = { isRecording: false, currentSessionId: null, tabId: null };
+    sendAppStateToNative();
     await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
     return { sessionId, recordingId };
 }
@@ -667,4 +755,10 @@ chrome.runtime.onStartup.addListener(() => {
         currentSessionId: null,
         tabId: null
     };
+    lastNativeError = null;
+    // Defensive re-connect: the module-level nativeBridgeConnect() call above
+    // normally covers this (the SW script re-evaluates from scratch on
+    // browser startup), but this is a cheap no-op if already connected
+    // (nativeBridgeConnect() returns early when nativePort is set).
+    nativeBridgeConnect();
 });

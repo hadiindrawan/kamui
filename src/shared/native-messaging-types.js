@@ -16,6 +16,7 @@
 /** @typedef {{ type: 'PING' }} PingMsg */
 /** @typedef {{ type: 'START_TRACKING', session_id: string }} StartTrackingMsg */
 /** @typedef {{ type: 'STOP_TRACKING' }} StopTrackingMsg */
+/** @typedef {{ type: 'APP_STATE', is_recording: boolean, quality: string, mode: string }} AppStateMsg */
 
 /* ─── Native App → Extension ─── */
 
@@ -25,6 +26,8 @@
 /** @typedef {{ type: 'CURSOR_POSITION', x: number, y: number, timestamp_ms: number }} CursorPositionMsg */
 /** @typedef {{ type: 'CLICK', x: number, y: number, button: 'left'|'right'|'middle', timestamp_ms: number }} ClickMsg */
 /** @typedef {{ type: 'ERROR', code: string, message: string }} ErrorMsg */
+/** @typedef {{ type: 'REQUEST_SET_QUALITY', quality: string }} RequestSetQualityMsg */
+/** @typedef {{ type: 'REQUEST_OPEN_RECORDINGS' }} RequestOpenRecordingsMsg */
 
 /* ─── Constants ─── */
 
@@ -34,6 +37,7 @@ export const MESSAGE_TYPES = {
     PING: 'PING',
     START_TRACKING: 'START_TRACKING',
     STOP_TRACKING: 'STOP_TRACKING',
+    APP_STATE: 'APP_STATE',
 
     // Native → Extension
     PONG: 'PONG',
@@ -42,4 +46,6 @@ export const MESSAGE_TYPES = {
     CURSOR_POSITION: 'CURSOR_POSITION',
     CLICK: 'CLICK',
     ERROR: 'ERROR',
+    REQUEST_SET_QUALITY: 'REQUEST_SET_QUALITY',
+    REQUEST_OPEN_RECORDINGS: 'REQUEST_OPEN_RECORDINGS',
 };

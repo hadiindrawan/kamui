@@ -73,6 +73,21 @@ export function useSettings() {
         })();
     }, [checkNativeAvailability]);
 
+    // Quality can also change from outside this popup instance — e.g. the
+    // native tray's Quality submenu, which asks the service worker to persist
+    // the change directly (see REQUEST_SET_QUALITY in service-worker.js).
+    // Without this, an already-open popup would show a stale value until
+    // reopened.
+    useEffect(() => {
+        function handleStorageChange(changes, areaName) {
+            if (areaName === 'local' && changes.quality) {
+                setQuality(changes.quality.newValue);
+            }
+        }
+        chrome.storage.onChanged.addListener(handleStorageChange);
+        return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+    }, []);
+
     const toggleMicrophone = useCallback(() => {
         setMicEnabled((prev) => {
             const next = !prev;

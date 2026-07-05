@@ -34,6 +34,9 @@ export function useRecording({ settings, onRecordingStopped }) {
                     if (state.recordingMode) {
                         settings.syncRecordingMode(state.recordingMode);
                     }
+                    if (state.nativeTrackerWarning) {
+                        setNativeTrackerWarning(state.nativeTrackerWarning);
+                    }
                 }
             } catch (e) {
                 log.error('Error checking state:', e);

@@ -30,6 +30,7 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, 'src/features/popup/index.html'),
         editor: resolve(__dirname, 'src/features/editor/index.html'),
+        recordings: resolve(__dirname, 'src/features/recordings/index.html'),
         offscreen: resolve(__dirname, 'src/core/offscreen/index.html'),
         'service-worker': resolve(__dirname, 'src/core/background/service-worker.js'),
         'cursor-tracker': resolve(__dirname, 'src/core/content/cursor-tracker.js'),
