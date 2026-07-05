@@ -47,8 +47,14 @@ export function calculateCameraPosition(currentTimeMs, events, dimensions) {
     if (zoomTarget) {
         const { event, phase, progress } = zoomTarget;
 
-        // Denormalize coordinates to video dimensions
-        const pos = denormalizeCoordinates(event, videoWidth, videoHeight);
+        // Denormalize coordinates to video dimensions. When the segment carries
+        // keyframes (a sustained session that pans between focus points), the
+        // anchor is evaluated along the smoothed keyframe path at the current
+        // time so the held zoom glides instead of jumping.
+        const kf = keyframeAnchor(event, currentTimeMs);
+        const pos = kf
+            ? { x: kf.x * videoWidth, y: kf.y * videoHeight }
+            : denormalizeCoordinates(event, videoWidth, videoHeight);
 
         // Get zoom level from the event itself, or fall back to global zoom level
         const eventZoomLevel = event.zoomLevel || zoomLevel;
@@ -139,15 +145,15 @@ function findZoomTarget(currentTimeMs, events, settings) {
     const { zoomDuration, transitionDuration } = settings;
     const preZoomDuration = transitionDuration;
 
-    // Find focus moments: major clicks, typing, selections (skip minor clicks)
-    const clickEvents = events.filter(e =>
+    // Find focus moments: major clicks, typing, selections, focus (skip minor clicks)
+    const focusEvents = events.filter(e =>
         e.type === 'click' || e.type === 'dblclick' || e.type === 'zoom' ||
-        e.type === 'crop' || e.type === 'typing' || e.type === 'selection'
+        e.type === 'crop' || e.type === 'typing' || e.type === 'selection' || e.type === 'focus'
     );
 
-    // Filter out 'click-minor' events to reduce noise
-    const focusEvents = clickEvents.filter(e => e.type !== 'click-minor');
-
+    // Take the LAST matching window so overlapping segments resolve to the most
+    // recent one (auto-zoom sessions and manual edits can overlap).
+    let match = null;
     for (const event of focusEvents) {
         const eventTime = event.time;
         const eventDuration = event.duration || zoomDuration; // Use individual duration or fall back to global
@@ -158,42 +164,97 @@ function findZoomTarget(currentTimeMs, events, settings) {
 
         if (currentTimeMs >= zoomStartTime && currentTimeMs < zoomOutEndTime) {
             if (currentTimeMs < zoomInEndTime) {
-                // Zooming in
                 const elapsed = currentTimeMs - zoomStartTime;
                 const progress = Math.max(0, Math.min(1, elapsed / preZoomDuration));
-                return { event, phase: 'zoom-in', progress };
+                match = { event, phase: 'zoom-in', progress };
             } else if (currentTimeMs < zoomHoldEndTime) {
-                // Holding zoom
-                return { event, phase: 'zoom-hold', progress: 1 };
+                match = { event, phase: 'zoom-hold', progress: 1 };
             } else {
-                // Zooming out
                 const elapsed = currentTimeMs - zoomHoldEndTime;
                 const progress = Math.max(0, Math.min(1, elapsed / transitionDuration));
-                return { event, phase: 'zoom-out', progress };
+                match = { event, phase: 'zoom-out', progress };
             }
         }
     }
 
-    return null;
+    return match;
 }
 
-// Find the most recent cursor position for follow mode
+/**
+ * Evaluates a sustained-zoom segment's keyframe path at `currentTimeMs`,
+ * returning a smoothed {x, y} in the same normalized space as the keyframes.
+ * Keyframe `t` is relative to the segment start (event.time). Returns null when
+ * there's no multi-point path to follow (the caller falls back to the anchor).
+ */
+function keyframeAnchor(event, currentTimeMs) {
+    if (!event.keyframes || event.keyframes.length < 2) return null;
+    const pts = event.keyframes.map(kf => ({ time: event.time + kf.t, x: kf.x, y: kf.y }));
+    return smoothCursorPosition(currentTimeMs, pts);
+}
+
+// Find a smoothed cursor position for follow mode. Raw cursor samples are
+// noisy (hand tremor, trackpad jitter, irregular sampling rate) — following
+// them directly makes the camera amplify every micro-movement into a shaky
+// pan. Smoothing the path with a spline before using it is what separates a
+// cinematic auto-zoom from a nauseating one.
 function findFollowTarget(currentTimeMs, events) {
-    // Look for recent 'follow' or 'move' events
     const followEvents = events.filter(e => e.type === 'follow' || e.type === 'move');
+    return smoothCursorPosition(currentTimeMs, followEvents);
+}
 
-    if (followEvents.length === 0) return null;
+/**
+ * Smooths a chronological cursor path using a centripetal Catmull-Rom
+ * spline, evaluated at `currentTimeMs`. Centripetal parameterization (knot
+ * spacing ~ distance^0.5 instead of uniform steps) keeps the curve
+ * well-behaved even though samples arrive at irregular intervals.
+ */
+export function smoothCursorPosition(currentTimeMs, pathEvents) {
+    if (pathEvents.length === 0) return null;
+    if (pathEvents.length === 1) return pathEvents[0];
 
-    // Find the most recent event before current time
-    let latestEvent = null;
-    for (let i = followEvents.length - 1; i >= 0; i--) {
-        if (followEvents[i].time <= currentTimeMs) {
-            latestEvent = followEvents[i];
-            break;
-        }
+    // Index of the last sample at or before currentTimeMs.
+    let i = -1;
+    for (let k = 0; k < pathEvents.length; k++) {
+        if (pathEvents[k].time <= currentTimeMs) i = k;
+        else break;
     }
+    if (i === -1) return pathEvents[0]; // before the first sample
+    if (i === pathEvents.length - 1) return pathEvents[i]; // after the last sample
 
-    return latestEvent;
+    const p1 = pathEvents[i];
+    const p2 = pathEvents[i + 1];
+    const p0 = pathEvents[i - 1] || p1; // duplicate boundary point when missing
+    const p3 = pathEvents[i + 2] || p2;
+
+    const segmentDuration = p2.time - p1.time;
+    const t = segmentDuration > 0 ? (currentTimeMs - p1.time) / segmentDuration : 0;
+
+    return catmullRomSegment(p0, p1, p2, p3, t);
+}
+
+/** Centripetal Catmull-Rom spline segment between p1 and p2, using p0/p3 as tangent context. */
+function catmullRomSegment(p0, p1, p2, p3, t) {
+    const alpha = 0.5;
+    const knotDistance = (a, b) => Math.max(Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2), 1e-6) ** alpha;
+
+    const t0 = 0;
+    const t1 = t0 + knotDistance(p0, p1);
+    const t2 = t1 + knotDistance(p1, p2);
+    const t3 = t2 + knotDistance(p2, p3);
+    const tt = t1 + t * (t2 - t1);
+
+    const interp = (a, b, ta, tb) => {
+        if (tb === ta) return a;
+        const f = (tt - ta) / (tb - ta);
+        return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+    };
+
+    const A1 = interp(p0, p1, t0, t1);
+    const A2 = interp(p1, p2, t1, t2);
+    const A3 = interp(p2, p3, t2, t3);
+    const B1 = interp(A1, A2, t0, t2);
+    const B2 = interp(A2, A3, t1, t3);
+    return interp(B1, B2, t1, t2);
 }
 
 function lerp(start, end, t) {

@@ -1,4 +1,5 @@
 .env
+*.pem
 
 node_modules
 yarn-error.log
@@ -9,3 +10,4 @@ yarn-error.log
 scripts/
 dist/
 public/ffmpeg
+*.mp4

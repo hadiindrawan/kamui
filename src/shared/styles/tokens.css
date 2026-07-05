@@ -1,0 +1,86 @@
+/**
+ * Beunta design tokens — Linear-inspired dark system (see DESIGN.md).
+ *
+ * Single source of truth for color, type, radius, and spacing. Consumed by
+ * popup.css and editor.css. New code should use the semantic tokens
+ * (--bg-canvas, --surface-1, --accent, --ink, ...). The legacy --color-*
+ * aliases at the bottom remap the old coral palette onto this system so
+ * un-migrated rules re-theme automatically.
+ */
+
+:root {
+    /* ─── Surface ladder (deepest → most lifted) ─── */
+    --bg-canvas: #010102;
+    --surface-1: #0f1011;
+    --surface-2: #141516;
+    --surface-3: #18191a;
+    --surface-4: #191a1b;
+
+    /* ─── Hairline borders ─── */
+    --hairline: #23252a;
+    --hairline-strong: #34343a;
+    --hairline-tertiary: #3e3e44;
+
+    /* ─── Brand accent (lavender-blue) — used scarcely: primary CTA, focus, links ─── */
+    --accent: #5e6ad2;
+    --accent-hover: #828fff;
+    --accent-focus: #5e69d1;
+    --on-accent: #ffffff;
+
+    /* ─── Text (ink) ─── */
+    --ink: #f7f8f8;
+    --ink-muted: #d0d6e0;
+    --ink-subtle: #8a8f98;
+    --ink-tertiary: #62666d;
+
+    /* ─── Semantic ─── */
+    --success: #27a644;
+    /* Stop/record is a functional recorder affordance — a restrained red, used
+       only for the active-recording state and destructive actions. */
+    --danger: #e5484d;
+    --danger-hover: #f2555a;
+    /* Interrupted/crash-recovery state only — not a general-purpose warning. */
+    --warn: #d29922;
+    /* Categorical tag color (e.g. "crop" segment type) — not a UI accent. */
+    --info: #4c8bf5;
+
+    /* ─── Typography ─── */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+    /* ─── Radius scale ─── */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-xxl: 24px;
+    --radius-pill: 9999px;
+
+    /* ─── Spacing scale (4px base) ─── */
+    --space-xxs: 4px;
+    --space-xs: 8px;
+    --space-sm: 12px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+    --space-xxl: 48px;
+
+    /* ─── Focus ring ─── */
+    --focus-ring: 0 0 0 2px rgba(94, 105, 209, 0.5);
+
+    /* ═══ Legacy aliases (map old coral palette → Linear system) ═══ */
+    --color-base: var(--bg-canvas);
+    --color-base-dark: var(--surface-1);
+    --color-base-darker: #000000;
+    --color-base-light: var(--surface-2);
+    --color-accent: var(--accent);
+    --color-accent-hover: var(--accent-hover);
+    --color-success: var(--success);
+    --color-warning: var(--warn);
+    --color-text: var(--ink);
+    --color-text-muted: var(--ink-subtle);
+    --color-bg-card: var(--surface-2);
+    --color-border: var(--hairline);
+    --font-family: var(--font-sans);
+}

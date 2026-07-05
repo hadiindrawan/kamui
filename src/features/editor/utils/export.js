@@ -1,5 +1,7 @@
 // MP4 video export using canvas frame capture and backend API conversion
 import { calculateCameraPosition, interpolateCamera } from './camera.js';
+import { getAspectRatioValue, STANDARD_RESOLUTIONS } from './coordinates.js';
+import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from './scene-renderer.js';
 import { conversionAPI, APIError } from '../../../core/services/api-client.js';
 import { config, isBackendConversionEnabled } from '../../../shared/config.js';
 
@@ -23,6 +25,10 @@ export async function exportVideoMP4(recording, settings, onProgress) {
         backgroundValue = null,
         backgroundBlur = 'none',
         insetPadding = 0,
+        cropToFill = false,
+        cropPanX = 0.5,
+        cropPanY = 0.5,
+        cropZoom = 1,
         showShadow = false,
         showBorder = false,
         showFollowCursor = false,
@@ -67,7 +73,7 @@ export async function exportVideoMP4(recording, settings, onProgress) {
             
             await new Promise((res, rej) => {
                 video.onloadedmetadata = () => {
-                    const { width, height } = calculateCanvasSize(video.videoWidth, video.videoHeight, aspectRatio);
+                    const { width, height } = calculateCanvasSize(video.videoWidth, video.videoHeight, aspectRatio, exportScale);
                     canvas.width = width;
                     canvas.height = height;
                     res();
@@ -102,8 +108,20 @@ export async function exportVideoMP4(recording, settings, onProgress) {
             await new Promise(r => video.onseeked = r);
             video.play();
 
-            // Constants for rendering setup
-            const sceneParams = prepareSceneParams(video.videoWidth, video.videoHeight, canvas.width, canvas.height, settings, recording, backgroundImage);
+            // Constants for rendering setup. The legacy path draws the raw
+            // <video> element directly (no upstream cropping), so the shared
+            // scene renderer applies the source-rect crop itself.
+            const model = buildSceneModel({
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+                settings,
+                segments: settings.segments || [],
+                recordingEvents: recording?.events || [],
+            });
+            const bgBuffer = document.createElement('canvas');
+            renderBackgroundBuffer(bgBuffer, model.layout, settings, backgroundImage);
+            const scaleX = canvas.width / model.layout.width;
+            const scaleY = canvas.height / model.layout.height;
             let lastCamera = null;
 
             const legacyRenderLoop = () => {
@@ -111,15 +129,22 @@ export async function exportVideoMP4(recording, settings, onProgress) {
                     mediaRecorder.stop();
                     return;
                 }
-                
+
                 const currentTimeMs = video.currentTime * 1000;
                 onProgress(Math.min(70, 10 + ((video.currentTime - trimStart) / (actualTrimEnd - trimStart)) * 60));
-                
-                const targetCamera = calculateCameraPosition(currentTimeMs, sceneParams.events, sceneParams.cameraConfig);
+
+                const targetCamera = calculateCameraPosition(currentTimeMs, model.events, model.cameraConfig);
                 const camera = interpolateCamera(lastCamera, targetCamera, 0.15);
                 lastCamera = camera;
 
-                drawExportFrame(ctx, video, currentTimeMs, { ...sceneParams, camera });
+                ctx.save();
+                ctx.scale(scaleX, scaleY);
+                drawSceneFrame(ctx, video, currentTimeMs, model, {
+                    camera, backgroundBuffer: bgBuffer,
+                    showShadow, showBorder, borderRadius: settings.borderRadius || 0,
+                    backgroundMode,
+                });
+                ctx.restore();
                 requestAnimationFrame(legacyRenderLoop);
             };
 
@@ -138,104 +163,6 @@ export async function exportVideoMP4(recording, settings, onProgress) {
             return;
 }
 
-
-function drawBackground(ctx, w, h, mode, value, color, blur, img) {
-    if (mode === 'hidden') {
-        ctx.fillStyle = color;
-        ctx.fillRect(0, 0, w, h);
-        return;
-    }
-
-    const blurs = {
-        'none': 0,
-        'light': 4,
-        'moderate': 12,
-        'strong': 24
-    };
-    const blurAmount = blurs[blur] || 0;
-
-    if (blurAmount > 0) ctx.filter = `blur(${blurAmount}px)`;
-
-    if (mode === 'color') {
-        ctx.fillStyle = value || color;
-        ctx.fillRect(0, 0, w, h);
-    } else if (mode === 'gradient') {
-        if (Array.isArray(value)) {
-            const grad = ctx.createLinearGradient(0, 0, 0, h);
-            value.forEach((c, i) => {
-                grad.addColorStop(i / (value.length - 1), c);
-            });
-            ctx.fillStyle = grad;
-        } else {
-            // Fallback for string
-            ctx.fillStyle = value || '#000';
-        }
-        ctx.fillRect(0, 0, w, h);
-
-    } else if (mode === 'image') {
-        if (img) {
-            const imgRatio = img.width / img.height;
-            const canvasRatio = w / h;
-
-            let drawW, drawH, drawX, drawY;
-
-            if (canvasRatio > imgRatio) {
-                drawW = w;
-                drawH = w / imgRatio;
-                drawX = 0;
-                drawY = (h - drawH) / 2;
-            } else {
-                drawH = h;
-                drawW = h * imgRatio;
-                drawX = (w - drawW) / 2;
-                drawY = 0;
-            }
-            ctx.drawImage(img, drawX, drawY, drawW, drawH);
-        } else {
-            ctx.fillStyle = '#222';
-            ctx.fillRect(0, 0, w, h);
-        }
-    }
-
-    ctx.filter = 'none';
-}
-
-function drawSceneOverlays(ctx, currentTimeMs, events, sceneW, sceneH) {
-    // Note: ctx is already transformed by Camera.
-    // events.x/y are normalized relative to Scene.
-
-    // Filter active clicks
-    events.forEach(event => {
-        if (event.type !== 'click') return;
-
-        const elapsed = currentTimeMs - event.time;
-        if (elapsed < 0 || elapsed > 600) return;
-
-        const progress = elapsed / 600;
-
-        // Calculate position in Scene Pixels
-        // Since we are drawing into a context that is already transformed to the scene,
-        // we just map normalized -> pixels.
-
-        const cx = event.x * sceneW;
-        const cy = event.y * sceneH;
-
-        // Draw expanding rings
-        for (let ring = 0; ring < 3; ring++) {
-            const ringProgress = Math.min(1, (progress - ring * 0.1) / 0.7);
-            if (ringProgress <= 0) continue;
-
-            const radius = 8 + ringProgress * 40; // Increased size to match editor
-            const alpha = (1 - ringProgress) * 0.6;
-
-            ctx.strokeStyle = `rgba(254, 109, 115, ${alpha})`;
-            ctx.lineWidth = 2 - ringProgress;
-            ctx.beginPath();
-            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-    });
-}
 
 // Alias for backward compatibility
 export async function exportVideoWebM(recording, settings, onProgress) {
@@ -290,7 +217,7 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error('No video track found in source');
     
-    const { width: canvasW, height: canvasH } = calculateCanvasSize(videoTrack.squarePixelWidth, videoTrack.squarePixelHeight, settings.aspectRatio);
+    const { width: canvasW, height: canvasH } = calculateCanvasSize(videoTrack.squarePixelWidth, videoTrack.squarePixelHeight, settings.aspectRatio, settings.exportScale || 1);
     
     const target = new BufferTarget();
     const output = new Output({
@@ -298,23 +225,46 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
         target: target
     });
 
-    const sceneParams = prepareSceneParams(videoTrack.squarePixelWidth, videoTrack.squarePixelHeight, canvasW, canvasH, settings, recording, backgroundImage);
+    const videoW = videoTrack.squarePixelWidth;
+    const videoH = videoTrack.squarePixelHeight;
+
+    // Build the SAME scene model the live preview uses, so the export is a
+    // faithful reproduction. All cropping/zoom/framing geometry happens in
+    // drawSceneFrame; mediabunny is told NOT to resize or crop (we omit
+    // width/height/crop/fit) so `process` receives raw, full-resolution
+    // frames, and `processedWidth/Height` announce our composited output size.
+    const model = buildSceneModel({
+        videoWidth: videoW,
+        videoHeight: videoH,
+        settings,
+        segments: settings.segments || [],
+        recordingEvents: recording?.events || [],
+    });
     let lastCamera = null;
 
-    // Create the main rendering canvas (Offscreen if possible)
+    // Output/composite canvas at the final (possibly exportScale-d) resolution.
     const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(canvasW, canvasH) : document.createElement('canvas');
     if (!(canvas instanceof OffscreenCanvas)) {
         canvas.width = canvasW; canvas.height = canvasH;
     }
     const ctx = canvas.getContext('2d', { alpha: false });
-    
-    // Pre-render background once to a separate buffer for maximum performance
-    const backgroundBuffer = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(canvasW, canvasH) : document.createElement('canvas');
-    if (!(backgroundBuffer instanceof OffscreenCanvas)) {
-        backgroundBuffer.width = canvasW; backgroundBuffer.height = canvasH;
+
+    // Pre-render background once at layout (native) resolution; the per-frame
+    // exportScale transform upscales it along with everything else.
+    const backgroundBuffer = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
+    renderBackgroundBuffer(backgroundBuffer, model.layout, settings, backgroundImage);
+
+    // Persistent canvas we blit each raw sample into so drawSceneFrame can
+    // sample an arbitrary source sub-rect (VideoSample has no sub-rect draw).
+    const srcCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(videoW, videoH) : document.createElement('canvas');
+    if (!(srcCanvas instanceof OffscreenCanvas)) {
+        srcCanvas.width = videoW; srcCanvas.height = videoH;
     }
-    const bctx = backgroundBuffer.getContext('2d');
-    drawBackground(bctx, canvasW, canvasH, settings.backgroundMode, settings.backgroundValue, settings.backgroundColor, settings.backgroundBlur, backgroundImage);
+    const srcCtx = srcCanvas.getContext('2d', { alpha: false });
+
+    // exportScale (and even-dimension rounding) folded into one outer scale.
+    const scaleX = canvasW / model.layout.width;
+    const scaleY = canvasH / model.layout.height;
 
     const conversion = await Conversion.init({
         input,
@@ -323,30 +273,39 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
             start: settings.trimStart || 0,
             end: settings.trimEnd || undefined
         },
-        video: { 
+        video: {
             codec: 'avc',
-            width: canvasW,
-            height: canvasH,
+            processedWidth: canvasW,
+            processedHeight: canvasH,
             bitrate: settings.bitrate || QUALITY_HIGH,
             preset: settings.preset || 'medium',
-            fit: 'fill',
             hardwareAcceleration: 'no-preference',
             process: (sample) => {
                 const currentTimeMs = sample.timestamp * 1000;
-                
-                // Calculate Camera
-                const targetCamera = calculateCameraPosition(currentTimeMs, sceneParams.events, sceneParams.cameraConfig);
+
+                const targetCamera = calculateCameraPosition(currentTimeMs, model.events, model.cameraConfig);
                 const camera = interpolateCamera(lastCamera, targetCamera, 0.15);
                 lastCamera = camera;
 
-                // Draw processed frame using the PRE-RENDERED background
-                drawExportFrame(ctx, sample, currentTimeMs, { ...sceneParams, camera, backgroundBuffer });
+                // Blit the raw frame to the source canvas at native resolution.
+                sample.draw(srcCtx, 0, 0, videoW, videoH);
 
-                // Return the canvas to be encoded
+                ctx.save();
+                ctx.scale(scaleX, scaleY);
+                drawSceneFrame(ctx, srcCanvas, currentTimeMs, model, {
+                    camera,
+                    backgroundBuffer,
+                    showShadow: settings.showShadow,
+                    showBorder: settings.showBorder,
+                    borderRadius: settings.borderRadius || 0,
+                    backgroundMode: settings.backgroundMode,
+                });
+                ctx.restore();
+
                 return canvas;
             }
         },
-        audio: settings.isMuted ? { discard: true } : { 
+        audio: settings.isMuted ? { discard: true } : {
             codec: 'aac'
         }
     });
@@ -360,82 +319,33 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
 }
 
 // Logic separation for better maintainability and performance
-function calculateCanvasSize(videoW, videoH, aspectRatio) {
+export function calculateCanvasSize(videoW, videoH, aspectRatio, exportScale = 1) {
     let canvasW = videoW;
     let canvasH = videoH;
 
     if (aspectRatio !== 'Native') {
-        const aspectRatios = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '4:5': 4 / 5 };
-        const targetRatio = aspectRatios[aspectRatio] || 16 / 9;
-        if (targetRatio >= 1) {
-            canvasH = videoH;
-            canvasW = canvasH * targetRatio;
+        const standard = STANDARD_RESOLUTIONS[aspectRatio];
+        if (standard) {
+            canvasW = standard.width;
+            canvasH = standard.height;
         } else {
-            canvasW = videoH;
-            canvasH = canvasW / targetRatio;
+            const targetRatio = getAspectRatioValue(aspectRatio, videoW / videoH);
+            if (targetRatio >= 1) {
+                canvasH = videoH;
+                canvasW = canvasH * targetRatio;
+            } else {
+                canvasW = videoH;
+                canvasH = canvasW / targetRatio;
+            }
         }
     }
+
+    canvasW *= exportScale;
+    canvasH *= exportScale;
 
     return {
         width: Math.floor(canvasW / 2) * 2,
         height: Math.floor(canvasH / 2) * 2
-    };
-}
-
-function prepareSceneParams(videoW, videoH, canvasW, canvasH, settings, recording, backgroundImage) {
-    const { backgroundMode, insetPadding, showFollowCursor } = settings;
-    const videoRatio = videoW / videoH;
-    let videoRectX = 0, videoRectY = 0, videoRectW = canvasW, videoRectH = canvasH;
-
-    if (backgroundMode === 'hidden') {
-        const canvasRatio = canvasW / canvasH;
-        if (canvasRatio > videoRatio) {
-            videoRectH = canvasH;
-            videoRectW = videoRectH * videoRatio;
-            videoRectX = (canvasW - videoRectW) / 2;
-        } else {
-            videoRectW = canvasW;
-            videoRectH = videoRectW / videoRatio;
-            videoRectY = (canvasH - videoRectH) / 2;
-        }
-    } else {
-        const scaleBase = Math.min(canvasW, canvasH) / 1080;
-        const scaledPadding = insetPadding * scaleBase;
-        const safeW = canvasW - (scaledPadding * 2);
-        const safeH = canvasH - (scaledPadding * 2);
-        const fitScale = Math.min(safeW / videoW, safeH / videoH);
-        videoRectW = videoW * fitScale;
-        videoRectH = videoH * fitScale;
-        videoRectX = (canvasW - videoRectW) / 2;
-        videoRectY = (canvasH - videoRectH) / 2;
-    }
-
-    const events = settings.segments.map(seg => ({
-        ...seg, time: seg.startTime, type: 'click',
-        x: (seg.x * videoRectW + videoRectX) / canvasW,
-        y: (seg.y * videoRectH + videoRectY) / canvasH
-    }));
-
-    if (showFollowCursor) {
-        const followEvents = recording?.events?.filter(e => e.type === 'follow' || e.type === 'move') || [];
-        events.push(...followEvents.map(e => ({
-            ...e, x: (e.x * videoRectW + videoRectX) / canvasW, y: (e.y * videoRectH + videoRectY) / canvasH
-        })));
-    }
-
-    return {
-        canvasW, canvasH, videoW, videoH,
-        videoRectX, videoRectY, videoRectW, videoRectH,
-        ...settings,
-        backgroundImage,
-        events,
-        cameraConfig: {
-            videoWidth: canvasW, videoHeight: canvasH,
-            canvasWidth: canvasW, canvasHeight: canvasH,
-            zoomLevel: settings.zoomLevel,
-            zoomDuration: settings.zoomDuration,
-            transitionDuration: settings.transitionDuration
-        }
     };
 }
 
@@ -451,71 +361,4 @@ async function preloadImage(src) {
     } catch (e) {
         return null;
     }
-}
-
-function drawExportFrame(ctx, source, timestampMs, params) {
-    const { 
-        canvasW, canvasH, videoW, videoH, videoRectX, videoRectY, videoRectW, videoRectH,
-        backgroundMode, backgroundBuffer,
-        showShadow, showBorder, borderRadius = 0, camera, events 
-    } = params;
-
-    ctx.save();
-    ctx.clearRect(0, 0, canvasW, canvasH);
-    ctx.scale(canvasW / camera.srcW, canvasH / camera.srcH);
-    ctx.translate(-camera.srcX, -camera.srcY);
-
-    // Use pre-rendered buffer for background (fast!)
-    ctx.drawImage(backgroundBuffer, 0, 0);
-
-    // 2. Draw Video
-    // Calculate effective radius based on the visual width of the video in the scene
-    const scale = videoRectW / videoW;
-    const vRadius = Math.max(0, (borderRadius || 0) * scale);
-
-    if (backgroundMode !== 'hidden' && showShadow) {
-        ctx.save();
-        ctx.fillStyle = 'black';
-        ctx.shadowColor = 'rgba(0,0,0,0.5)';
-        ctx.shadowBlur = 40; ctx.shadowOffsetY = 20;
-        
-        if (ctx.roundRect) {
-            ctx.beginPath();
-            ctx.roundRect(videoRectX, videoRectY, videoRectW, videoRectH, vRadius);
-            ctx.fill();
-        } else {
-            ctx.fillRect(videoRectX, videoRectY, videoRectW, videoRectH);
-        }
-        ctx.restore();
-    }
-
-    ctx.save();
-    if (vRadius > 0 && ctx.roundRect) {
-        ctx.beginPath();
-        ctx.roundRect(videoRectX, videoRectY, videoRectW, videoRectH, vRadius);
-        ctx.clip();
-    }
-
-    // Direct draw (compatible with both VideoElement and VideoSample)
-    if (source.draw) {
-        source.draw(ctx, videoRectX, videoRectY, videoRectW, videoRectH);
-    } else {
-        ctx.drawImage(source, 0, 0, videoW, videoH, videoRectX, videoRectY, videoRectW, videoRectH);
-    }
-    ctx.restore();
-
-    if (backgroundMode !== 'hidden' && showBorder) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 2;
-        if (ctx.roundRect) {
-            ctx.beginPath();
-            ctx.roundRect(videoRectX, videoRectY, videoRectW, videoRectH, vRadius);
-            ctx.stroke();
-        } else {
-            ctx.strokeRect(videoRectX, videoRectY, videoRectW, videoRectH);
-        }
-    }
-
-    drawSceneOverlays(ctx, timestampMs, events, canvasW, canvasH);
-    ctx.restore();
 }

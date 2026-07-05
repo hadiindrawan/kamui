@@ -7,6 +7,10 @@ if (typeof window !== 'undefined') {
         runtime: {
             sendMessage: jest.fn(),
             getURL: jest.fn((path) => `chrome-extension://mock-id/${path}`),
+            onMessage: {
+                addListener: jest.fn(),
+                removeListener: jest.fn(),
+            },
         },
         storage: {
             local: {

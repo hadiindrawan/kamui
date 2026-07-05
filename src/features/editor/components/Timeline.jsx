@@ -8,6 +8,7 @@ import {
 const Timeline = React.memo(function Timeline({
     duration,
     currentTime,
+    registerPlayhead,
     segments = [],
     selectedSegmentId,
     onSeek,
@@ -343,8 +344,11 @@ const Timeline = React.memo(function Timeline({
                                     </>
                                 )}
 
-                                {/* Playhead */}
+                                {/* Playhead — position driven imperatively via
+                                    registerPlayhead (rAF while playing, currentTime
+                                    sync while paused) for smooth 60fps motion. */}
                                 <div
+                                    ref={registerPlayhead}
                                     className="playhead"
                                     style={{
                                         left: `${getPositionPercent(currentTime)}%`,

@@ -1,21 +1,164 @@
 // Background service worker for managing recording lifecycle
+import { createLogger } from '../../shared/utils/logger.js';
+import { isZoomWorthyClick } from '../../shared/utils/interaction-classifier.js';
+const log = createLogger('SW');
+
+// ─── Native Bridge (inlined — MV3 service workers don't support dynamic import()) ───
+
+const NATIVE_HOST_NAME = 'com.beunta.native';
+let nativePort = null;
+let nativeBridgeReconnectAttempts = 0;
+const MAX_NATIVE_RECONNECT_ATTEMPTS = 3;
+const NATIVE_RECONNECT_DELAY_MS = 2000;
+
+const nativeListeners = new Map();
+
+function nativeBridgeConnect() {
+    if (nativePort) return nativePort;
+
+    try {
+        nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+        log.info('Native bridge connected to', NATIVE_HOST_NAME);
+    } catch (e) {
+        log.error('Failed to connect to native app:', e.message);
+        return null;
+    }
+
+    nativePort.onMessage.addListener((message) => {
+        log.debug('\u2190 Native message received:', message.type, message);
+
+        // TRACKING_STOPPED arrives both as a reply to our own STOP_TRACKING and
+        // unprompted from a tray "Stop Recording" click. finishNativeRecording()
+        // is idempotent (no-ops if nothing is recording), so handling it here
+        // unconditionally covers both cases without double-finalizing.
+        if (message.type === 'TRACKING_STOPPED') {
+            log.info('Native TRACKING_STOPPED received — finalizing recording.');
+            finishNativeRecording().catch((e) => log.error('finishNativeRecording failed:', e));
+        }
+
+        // Call any registered type-specific listener (cursor/click ingestion, etc.)
+        const handler = nativeListeners.get(message.type);
+        if (handler) handler(message);
+
+        // Also forward to popup/other extension pages (may fail silently if popup is closed)
+        chrome.runtime.sendMessage({
+            type: 'NATIVE_MESSAGE',
+            nativeType: message.type,
+            payload: message
+        }).catch(() => {}); // silently ignore if no receiver
+    });
+
+    nativePort.onDisconnect.addListener(() => {
+        const lastError = chrome.runtime.lastError;
+        log.warn('Native app disconnected:', lastError?.message || 'unknown');
+        nativePort = null;
+        chrome.runtime.sendMessage({ type: 'NATIVE_DISCONNECTED' }).catch(() => {});
+        // Safety net: if the native helper crashed/quit mid-recording, we'd
+        // never receive TRACKING_STOPPED — finalize so the recording isn't lost
+        // and the popup doesn't hang in the recording state.
+        if (recordingState.isRecording && recordingState.recordingMode === 'native') {
+            log.warn('Native app disconnected during recording — finalizing.');
+            finishNativeRecording()
+                .then(() => chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED', reason: 'native-disconnected' }).catch(() => {}))
+                .catch((e) => log.error('finishNativeRecording (disconnect) failed:', e));
+        }
+        if (nativeBridgeReconnectAttempts < MAX_NATIVE_RECONNECT_ATTEMPTS) {
+            nativeBridgeReconnectAttempts++;
+            log.info(`Reconnect attempt ${nativeBridgeReconnectAttempts}/${MAX_NATIVE_RECONNECT_ATTEMPTS} in ${NATIVE_RECONNECT_DELAY_MS}ms`);
+            setTimeout(() => nativeBridgeConnect(), NATIVE_RECONNECT_DELAY_MS);
+        } else {
+            log.warn('Max reconnect attempts reached, giving up.');
+        }
+    });
+
+    nativeBridgeReconnectAttempts = 0;
+    return nativePort;
+}
+
+function nativeBridgeDisconnect() {
+    if (nativePort) {
+        try { nativePort.disconnect(); } catch { /* ignore */ }
+        nativePort = null;
+    }
+    nativeListeners.clear();
+}
+
+function nativeBridgeSend(message) {
+    if (!nativePort) throw new Error('Native app not connected');
+    log.debug('\u2192 Native message sent:', message.type, message);
+    nativePort.postMessage(message);
+}
+
+function nativeBridgeOnMessage(type, callback) {
+    nativeListeners.set(type, callback);
+}
+
+function nativeBridgeOffMessage(type) {
+    nativeListeners.delete(type);
+}
+
+async function checkNativeAppAvailable() {
+    let port = null;
+    try {
+        port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+        const result = await new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(false), 2000);
+            port.onMessage.addListener((msg) => {
+                if (msg.type === 'PONG') { clearTimeout(timeout); resolve(true); }
+            });
+            port.onDisconnect.addListener(() => { clearTimeout(timeout); resolve(false); });
+            port.postMessage({ type: 'PING' });
+        });
+        port.disconnect();
+        return result;
+    } catch {
+        if (port) try { port.disconnect(); } catch { /* ignore */ }
+        return false;
+    }
+}
+
+// ─── Recording State ───
 
 let recordingState = {
     isRecording: false,
     currentSessionId: null,
-    tabId: null
+    tabId: null,
+
+    // Native mode: capture is still the browser's getDisplayMedia (same as
+    // 'browser' mode) — the only difference is cursor/click events come from
+    // the native app's global tracker instead of a page content script, so
+    // auto-zoom works for full-desktop recordings, not just in-tab ones.
+    recordingMode: 'browser',  // 'browser' | 'native'
+    nativeConnected: false,
 };
 
 // Handle messages from popup and content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    log.debug(`→ Message received: ${message.type}`, { mode: message.recordingMode || recordingState.recordingMode, sender: sender?.id });
     switch (message.type) {
-        case 'START_RECORDING':
-            handleStartRecording(message, sender, sendResponse);
-            return true; // Required for async response
-
-        case 'STOP_RECORDING':
-            handleStopRecording(message, sender, sendResponse);
+        case 'START_RECORDING': {
+            // Allow popup to explicitly pass recordingMode in message, so routing
+            // is robust even if the service worker was restarted (which resets state).
+            const mode = message.recordingMode || recordingState.recordingMode;
+            if (mode === 'native') {
+                // Sync mode into state in case it was reset by SW restart
+                recordingState.recordingMode = 'native';
+                handleNativeStartRecording(message, sender, sendResponse);
+            } else {
+                handleStartRecording(message, sender, sendResponse);
+            }
             return true;
+        }
+
+        case 'STOP_RECORDING': {
+            const mode = message.recordingMode || recordingState.recordingMode;
+            if (mode === 'native') {
+                handleNativeStopRecording(message, sender, sendResponse);
+            } else {
+                handleStopRecording(message, sender, sendResponse);
+            }
+            return true;
+        }
 
         case 'RESUME_RECORDING':
             handleResumeRecording(message, sender, sendResponse);
@@ -29,24 +172,73 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Forward cursor events to offscreen document
             forwardToOffscreen(message);
             break;
+
+        case 'OFFSCREEN_TRACK_ENDED':
+            // The display capture ended outside our control — the user clicked
+            // Chrome's macOS screen-sharing "Stop" indicator, or the source went
+            // away. Finalize through the normal stop path so the recording is
+            // saved and the UI resets, instead of hanging.
+            handleTrackEnded();
+            break;
+
+        // ─── Native mode handlers ───
+
+        case 'SET_RECORDING_MODE':
+            recordingState.recordingMode = message.mode; // 'browser' | 'native'
+            sendResponse({ success: true });
+            break;
+
+        case 'CHECK_NATIVE_AVAILABLE':
+            handleCheckNativeAvailable(message, sender, sendResponse);
+            return true;
+
+        // ─── Region recording ───
+
+        case 'SELECT_REGION':
+            handleSelectRegion(message, sender, sendResponse);
+            return true;
+
+        case 'REGION_SELECTED':
+            handleRegionSelected(message);
+            break;
+
+        case 'REGION_CANCELLED':
+            log.info('Region selection cancelled by user.');
+            pendingRegionStart = null;
+            break;
+
+        // NATIVE_MESSAGE is the SW's own broadcast of native events to the
+        // popup — nothing to do here on the SW side (that's handled directly
+        // in nativeBridgeConnect()'s onMessage listener, which sees native
+        // messages before they're re-wrapped and broadcast).
     }
 });
 
-async function handleStartRecording(message, sender, sendResponse) {
-    try {
-        // Generate session ID
-        const sessionId = `rec_${Date.now()}`;
+// ─── Native Recording Handlers ───
 
-        // Get active tab
+async function handleCheckNativeAvailable(message, sender, sendResponse) {
+    log.info('Checking native app availability...');
+    try {
+        const available = await checkNativeAppAvailable();
+        log.info('Native app available:', available);
+        sendResponse({ available });
+    } catch (error) {
+        log.error('Native availability check failed:', error);
+        sendResponse({ available: false, error: error.message });
+    }
+}
+
+async function handleNativeStartRecording(message, sender, sendResponse) {
+    log.info('handleNativeStartRecording: starting browser capture + native cursor tracker...');
+    try {
+        const sessionId = `rec_native_${Date.now()}`;
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-        // Create offscreen document for recording
         await createOffscreenDocument();
 
-        // Start recording in offscreen document
         const response = await chrome.runtime.sendMessage({
             type: 'OFFSCREEN_START_RECORDING',
-            sessionId: sessionId,
+            sessionId,
             tabId: tab.id,
             micEnabled: message.micEnabled || false,
             quality: message.quality || 'best-quality'
@@ -55,41 +247,198 @@ async function handleStartRecording(message, sender, sendResponse) {
         if (!response || !response.success) {
             throw new Error(response?.error || 'Failed to start recording');
         }
+        log.info('Offscreen recording started, session:', sessionId);
 
-        // Update state only after successful start
         recordingState = {
             isRecording: true,
             currentSessionId: sessionId,
             tabId: tab.id,
-            startTime: Date.now() // Track start time for global timer sync
+            startTime: Date.now(),
+            recordingMode: 'native',
+            nativeConnected: false,
         };
 
-        // 1. Ensure content script is injected into the ACTIVE tab
+        // Start the native global cursor/click tracker. Coordinates are
+        // screen-global, so this only lines up with the captured frame when
+        // the user shares "Entire Screen" in the getDisplayMedia picker.
+        nativeBridgeConnect();
+        nativeBridgeOnMessage('CURSOR_POSITION', (msg) => handleNativeCursorEvent(sessionId, msg));
+        nativeBridgeOnMessage('CLICK', (msg) => handleNativeClickEvent(sessionId, msg));
+        try {
+            nativeBridgeSend({ type: 'START_TRACKING', session_id: sessionId });
+            recordingState.nativeConnected = true;
+            log.info('Native tracker started for session:', sessionId);
+        } catch (e) {
+            log.warn('Native tracker unavailable, continuing without global cursor tracking:', e.message);
+        }
+
+        sendResponse({ success: true, sessionId });
+    } catch (error) {
+        log.error('Native start failed:', error);
+        recordingState = { isRecording: false, currentSessionId: null, tabId: null };
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/** Stops offscreen capture and opens the editor. Idempotent — safe to call
+ * from both the explicit STOP_RECORDING path and the tray-triggered
+ * TRACKING_STOPPED path without double-finalizing. */
+async function finishNativeRecording() {
+    if (!recordingState.isRecording) return null;
+    const sessionId = recordingState.currentSessionId;
+
+    nativeBridgeOffMessage('CURSOR_POSITION');
+    nativeBridgeOffMessage('CLICK');
+
+    const stopPromise = chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_RECORDING' });
+    const timeoutPromise = new Promise((r) => setTimeout(() => r({ timeout: true }), 3000));
+    const result = await Promise.race([stopPromise, timeoutPromise]);
+    if (result?.timeout) {
+        log.warn('Offscreen stop timed out, proceeding with fallback session ID.');
+    }
+    const recordingId = result?.recordingId || sessionId;
+
+    recordingState = { isRecording: false, currentSessionId: null, tabId: null, recordingMode: 'native', nativeConnected: false };
+
+    await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
+    log.info('Native recording finalized, saved as:', recordingId);
+    return { sessionId, recordingId };
+}
+
+async function handleNativeStopRecording(message, sender, sendResponse) {
+    log.info('handleNativeStopRecording: user requested stop.');
+    try {
+        if (recordingState.nativeConnected) {
+            try {
+                nativeBridgeSend({ type: 'STOP_TRACKING' });
+            } catch (e) {
+                log.warn('Failed to send STOP_TRACKING:', e.message);
+            }
+        }
+        const result = await finishNativeRecording();
+        if (!result) throw new Error('No active recording');
+        sendResponse({ success: true, ...result });
+    } catch (error) {
+        log.error('Native stop failed:', error);
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+function handleNativeCursorEvent(sessionId, msg) {
+    if (!recordingState.isRecording || recordingState.currentSessionId !== sessionId) return;
+    const time = msg.timestamp_ms - recordingState.startTime;
+    forwardToOffscreen({
+        type: 'CURSOR_EVENT',
+        sessionId,
+        event: { type: 'move', time, x: msg.x, y: msg.y }
+    });
+}
+
+function handleNativeClickEvent(sessionId, msg) {
+    if (!recordingState.isRecording || recordingState.currentSessionId !== sessionId) return;
+    const time = msg.timestamp_ms - recordingState.startTime;
+    // Native clicks are a comparatively rare, deliberate signal — unlike web
+    // clicks there's no DOM element to judge, so every click is zoom-worthy.
+    const eventType = isZoomWorthyClick({ x: msg.x, y: msg.y, recentClicks: [], hasInteractiveTarget: true })
+        ? 'click' : 'click-minor';
+    forwardToOffscreen({
+        type: 'CURSOR_EVENT',
+        sessionId,
+        event: { type: eventType, time, x: msg.x, y: msg.y, button: msg.button }
+    });
+}
+
+// ─── Region Recording Handlers ───
+
+// Start options captured when the user picks "Record region", consumed once the
+// content-script overlay reports the chosen rectangle.
+let pendingRegionStart = null;
+
+async function handleSelectRegion(message, sender, sendResponse) {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')))) {
+            throw new Error('Region selection is not available on this page. Open a normal website first.');
+        }
+        pendingRegionStart = { micEnabled: message.micEnabled || false, quality: message.quality || 'best-quality' };
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['region-selector.js'] });
+        sendResponse({ success: true });
+    } catch (error) {
+        log.error('Failed to start region selection:', error);
+        pendingRegionStart = null;
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+async function handleRegionSelected(message) {
+    const opts = pendingRegionStart || {};
+    pendingRegionStart = null;
+    log.info('Region selected — starting cropped recording.', message.rect);
+    await handleStartRecording(
+        {
+            micEnabled: opts.micEnabled,
+            quality: opts.quality,
+            regionSelection: { rect: message.rect, viewport: message.viewport, screen: message.screen },
+        },
+        null,
+        () => {},
+    );
+    // The popup is closed during selection; tell it (if reopened) recording began.
+    chrome.runtime.sendMessage({ type: 'RECORDING_STARTED' }).catch(() => {});
+}
+
+// ─── Browser Recording Handlers ───
+
+async function handleStartRecording(message, sender, sendResponse) {
+    log.info('handleStartRecording: starting browser session...');
+    try {
+        const sessionId = `rec_${Date.now()}`;
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        log.debug('Active tab:', { id: tab.id, url: tab.url });
+
+        await createOffscreenDocument();
+
+        const response = await chrome.runtime.sendMessage({
+            type: 'OFFSCREEN_START_RECORDING',
+            sessionId,
+            tabId: tab.id,
+            micEnabled: message.micEnabled || false,
+            quality: message.quality || 'best-quality',
+            regionSelection: message.regionSelection || null
+        });
+
+        if (!response || !response.success) {
+            throw new Error(response?.error || 'Failed to start recording');
+        }
+        log.info('Offscreen recording started, session:', sessionId);
+
+        recordingState = {
+            isRecording: true,
+            currentSessionId: sessionId,
+            tabId: tab.id,
+            startTime: Date.now()
+        };
+
         try {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 files: ['recording-widget.js', 'cursor-tracker.js']
             });
         } catch (e) {
-            console.log('[Background] Widget script injection skipped (likely already there):', e.message);
+            log.debug('Widget script injection skipped (already injected):', e.message);
         }
 
-        // 2. Broadcast to ALL tabs to show widget everywhere (for tabs already running the script)
+        log.info('Broadcasting START_TRACKING to all tabs...');
         await broadcastToAllTabs({
             type: 'START_TRACKING',
-            sessionId: sessionId,
+            sessionId,
             startTime: recordingState.startTime
         });
 
         sendResponse({ success: true, sessionId });
     } catch (error) {
-        console.error('Error starting recording:', error);
-        // Reset state on failure
-        recordingState = {
-            isRecording: false,
-            currentSessionId: null,
-            tabId: null
-        };
+        log.error('Error starting browser recording:', error);
+        recordingState = { isRecording: false, currentSessionId: null, tabId: null };
         sendResponse({ success: false, error: error.message });
     }
 }
@@ -149,51 +498,62 @@ async function handleResumeRecording(message, sender, sendResponse) {
     }
 }
 
+/** Stops browser-mode offscreen capture and opens the editor. Idempotent —
+ * shared by the explicit STOP_RECORDING path and the capture-ended path. */
+async function finishBrowserRecording() {
+    if (!recordingState.isRecording) return null;
+    const sessionId = recordingState.currentSessionId;
+    log.info('Stopping session:', sessionId);
+
+    await broadcastToAllTabs({ type: 'STOP_TRACKING' });
+
+    const stopPromise = chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_RECORDING' });
+    const timeoutPromise = new Promise(r => setTimeout(() => r({ timeout: true }), 3000));
+    const result = await Promise.race([stopPromise, timeoutPromise]);
+    if (result?.timeout) {
+        log.warn('Offscreen stop timed out, proceeding with fallback session ID.');
+    }
+
+    const recordingId = result?.recordingId || sessionId;
+    log.info('Recording saved as:', recordingId);
+
+    recordingState = { isRecording: false, currentSessionId: null, tabId: null };
+    await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
+    return { sessionId, recordingId };
+}
+
 async function handleStopRecording(message, sender, sendResponse) {
+    log.info('handleStopRecording: stopping browser session...');
     try {
         if (!recordingState.isRecording) {
+            log.warn('STOP_RECORDING called but no active recording in state.');
             throw new Error('No active recording');
         }
-
-        const sessionId = recordingState.currentSessionId;
-
-        // Notify ALL tabs to stop tracking and hide widgets
-        await broadcastToAllTabs({
-            type: 'STOP_TRACKING'
-        });
-
-        // Stop recording in offscreen with a safety timeout
-        // If the offscreen doc is under heavy load (1hr+ recording), it might be slow.
-        // We don't want to hang the UI.
-        const stopPromise = chrome.runtime.sendMessage({
-            type: 'OFFSCREEN_STOP_RECORDING'
-        });
-
-        const timeoutPromise = new Promise(r => setTimeout(() => r({ timeout: true }), 3000));
-        const result = await Promise.race([stopPromise, timeoutPromise]);
-
-        if (result?.timeout) {
-            console.warn('[SW] Offscreen stop timed out, proceeding with fallback ID');
-        }
-
-        const recordingId = result?.recordingId || sessionId;
-
-        // Reset state
-        recordingState = {
-            isRecording: false,
-            currentSessionId: null,
-            tabId: null
-        };
-
-        // Open editor page in new tab
-        await chrome.tabs.create({
-            url: `src/features/editor/index.html?id=${recordingId}`
-        });
-
-        sendResponse({ success: true, sessionId, recordingId });
+        const result = await finishBrowserRecording();
+        sendResponse({ success: true, ...result });
     } catch (error) {
-        console.error('Error stopping recording:', error);
+        log.error('Error stopping browser recording:', error);
         sendResponse({ success: false, error: error.message });
+    }
+}
+
+/** Handles the display capture ending outside our control (Chrome's stop
+ * indicator, source closed) for both browser and native modes. */
+async function handleTrackEnded() {
+    if (!recordingState.isRecording) return;
+    log.info('Capture ended externally — finalizing recording.');
+    try {
+        if (recordingState.recordingMode === 'native') {
+            if (recordingState.nativeConnected) {
+                try { nativeBridgeSend({ type: 'STOP_TRACKING' }); } catch (e) { log.warn('STOP_TRACKING send failed:', e.message); }
+            }
+            await finishNativeRecording();
+        } else {
+            await finishBrowserRecording();
+        }
+        chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED', reason: 'capture-ended' }).catch(() => {});
+    } catch (error) {
+        log.error('Error finalizing after capture ended:', error);
     }
 }
 
@@ -216,10 +576,18 @@ async function createOffscreenDocument() {
 }
 
 async function forwardToOffscreen(message) {
+    // Only forward if the offscreen document is actually open
     try {
+        const contexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT']
+        });
+        if (contexts.length === 0) {
+            log.debug('forwardToOffscreen: no offscreen document open, skipping.');
+            return;
+        }
         await chrome.runtime.sendMessage(message);
     } catch (e) {
-        console.error('Error forwarding to offscreen:', e);
+        log.warn('forwardToOffscreen failed:', e.message);
     }
 }
 
@@ -253,9 +621,13 @@ async function broadcastToAllTabs(message) {
     }
 }
 
-// Listen for tab updates to ensure widget is there
+// Listen for tab updates to ensure widget is there. Browser-mode only — in
+// native mode, tracking comes exclusively from the global Rust tracker; firing
+// START_TRACKING here would wrongly activate the page-level DOM tracker
+// (cursor-tracker.js), which can only see clicks inside the browser tab, never
+// clicks elsewhere on the desktop.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && recordingState.isRecording) {
+    if (changeInfo.status === 'complete' && recordingState.isRecording && recordingState.recordingMode !== 'native') {
         if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
             chrome.tabs.sendMessage(tabId, {
                 type: 'START_TRACKING',
@@ -272,9 +644,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
 });
 
-// Refresh state when tab becomes active
+// Refresh state when tab becomes active. Browser-mode only (see onUpdated above).
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    if (recordingState.isRecording) {
+    if (recordingState.isRecording && recordingState.recordingMode !== 'native') {
         try {
             const tab = await chrome.tabs.get(activeInfo.tabId);
             if (tab.url && !tab.url.startsWith('chrome://')) {

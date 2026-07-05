@@ -12,11 +12,28 @@ let globalDisplayStream = null;
 let globalMicStream = null;
 let recordingStartTime = 0;
 let currentQuality = 'best-quality';
+// When recording a pre-selected region, this holds the crop in viewport-
+// normalized coordinates so cursor events can be renormalized to the (cropped)
+// stored video, keeping the source-normalized convention intact for the editor.
+let regionCrop = null;
+let regionCropPx = null; // cropped output resolution, for recording metadata
+
+/** Renormalize a viewport-normalized event to the cropped region. */
+function remapEventToRegion(event) {
+    if (!regionCrop) return event;
+    const { x, y, w, h } = regionCrop;
+    if (!Number.isFinite(event.x) || !Number.isFinite(event.y)) return event;
+    return {
+        ...event,
+        x: Math.max(0, Math.min(1, (event.x - x) / w)),
+        y: Math.max(0, Math.min(1, (event.y - y) / h)),
+    };
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case 'OFFSCREEN_START_RECORDING':
-            startRecording(message.sessionId, message.tabId, message.micEnabled, message.quality, message.segmentId || 1)
+            startRecording(message.sessionId, message.tabId, message.micEnabled, message.quality, message.segmentId || 1, message.regionSelection)
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true;
@@ -28,26 +45,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
 
         case 'CURSOR_EVENT':
-            // Collect cursor events
+            // Collect cursor events (renormalized to the region when cropping).
             if (message.sessionId === currentSessionId) {
-                eventLog.push(message.event);
+                eventLog.push(remapEventToRegion(message.event));
             }
             break;
 
         case 'TRACKING_COMPLETE':
             // Batch update events
             if (message.sessionId === currentSessionId) {
-                eventLog = eventLog.concat(message.events);
+                eventLog = eventLog.concat(message.events.map(remapEventToRegion));
             }
             break;
     }
 });
 
-async function startRecording(sessionId, tabId, micEnabled = false, quality = 'best-quality', segmentId = 1) {
+async function startRecording(sessionId, tabId, micEnabled = false, quality = 'best-quality', segmentId = 1, regionSelection = null) {
     currentSessionId = sessionId;
     currentSegmentId = segmentId;
     currentQuality = quality;
     eventLog = [];
+    regionCrop = null;
+    regionCropPx = null;
     recordingStartTime = Date.now();
 
     // 0. VITAL: Save initial metadata with "in-progress" status for Zero-Loss recovery
@@ -101,6 +120,12 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
             }
         };
 
+        // For region recording, nudge Chrome toward capturing the current tab —
+        // that's the surface where the region maps exactly onto the frame.
+        if (regionSelection) {
+            displayMediaOptions.preferCurrentTab = true;
+        }
+
         const displayStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
 
         // 2. IMPROVED: Set Content Hint
@@ -110,6 +135,15 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
         if ('contentHint' in videoTrack) {
             videoTrack.contentHint = 'detail';
         }
+
+        // When the user stops the capture from Chrome's own UI (e.g. the macOS
+        // menu-bar screen-sharing indicator, or "Stop sharing"), the track ends
+        // but nothing else tells the extension. Notify the service worker so it
+        // runs the normal stop path instead of leaving the recording hanging.
+        videoTrack.addEventListener('ended', () => {
+            console.log('[Recorder] Display track ended (capture stopped externally).');
+            chrome.runtime.sendMessage({ type: 'OFFSCREEN_TRACK_ENDED', sessionId: currentSessionId }).catch(() => {});
+        });
 
         // Get microphone only if enabled
         let micStream = null;
@@ -134,8 +168,24 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
         globalDisplayStream = displayStream;
         globalMicStream = micStream;
 
+        // Region recording: crop the captured stream down to the selected area
+        // at record time, so the stored file is exactly the region (smaller +
+        // no editor step needed). Only the tab-capture surface maps the region
+        // exactly; other surfaces fall back to a full recording.
+        let regionVideoTrack = null;
+        if (regionSelection) {
+            regionVideoTrack = applyRegionCrop(videoTrack, regionSelection);
+        }
+
         // Mix audio streams
         const finalStream = await mixAudioStreams(displayStream, micStream);
+
+        // Swap the full-frame video track for the cropped one, if we built it.
+        if (regionVideoTrack) {
+            const oldVideo = finalStream.getVideoTracks()[0];
+            if (oldVideo) finalStream.removeTrack(oldVideo);
+            finalStream.addTrack(regionVideoTrack);
+        }
 
         // 3. IMPROVED: Codec Selection & Bitrate
         // We prioritize AV1 (best quality/size) > VP9 (great) > VP8 (fast)
@@ -209,6 +259,82 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
     } catch (error) {
         console.error('Recording Start Failed:', error);
         throw error;
+    }
+}
+
+/**
+ * Builds a cropped video track for region recording using the WebCodecs
+ * insertable-streams pipeline (MediaStreamTrackProcessor -> per-frame
+ * VideoFrame(visibleRect) -> MediaStreamTrackGenerator). Sets `regionCrop`
+ * (viewport-normalized) so cursor events get renormalized to match. Returns the
+ * new track, or null when cropping isn't possible (unsupported API, or a
+ * non-tab capture surface where the region can't be mapped exactly) — in which
+ * case recording proceeds full-frame.
+ */
+function applyRegionCrop(videoTrack, regionSelection) {
+    const hasPipeline = typeof MediaStreamTrackProcessor !== 'undefined'
+        && typeof MediaStreamTrackGenerator !== 'undefined'
+        && typeof VideoFrame !== 'undefined';
+    if (!hasPipeline) {
+        console.warn('[Recorder] Insertable streams unsupported — recording region full-frame.');
+        return null;
+    }
+
+    const settings = videoTrack.getSettings();
+    const captureW = settings.width;
+    const captureH = settings.height;
+    const surface = settings.displaySurface;
+    const { rect } = regionSelection;
+
+    // Only the tab-capture frame corresponds 1:1 to the page viewport the region
+    // was drawn over. For monitor/window captures the mapping needs screen
+    // geometry we can't derive reliably, so we skip the crop.
+    if (surface !== 'browser' || !captureW || !captureH) {
+        console.warn(`[Recorder] Region crop skipped (surface=${surface}). Share "This Tab" to record a region exactly.`);
+        return null;
+    }
+
+    const cropPx = {
+        x: Math.max(0, Math.round(rect.x * captureW)),
+        y: Math.max(0, Math.round(rect.y * captureH)),
+        w: Math.round(rect.w * captureW),
+        h: Math.round(rect.h * captureH),
+    };
+    // Encoders want even dimensions.
+    cropPx.w = Math.min(captureW - cropPx.x, Math.floor(cropPx.w / 2) * 2);
+    cropPx.h = Math.min(captureH - cropPx.y, Math.floor(cropPx.h / 2) * 2);
+    if (cropPx.w < 2 || cropPx.h < 2) return null;
+
+    regionCrop = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    regionCropPx = { width: cropPx.w, height: cropPx.h };
+
+    try {
+        const processor = new MediaStreamTrackProcessor({ track: videoTrack });
+        const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+        const transformer = new TransformStream({
+            transform(frame, controller) {
+                try {
+                    const cropped = new VideoFrame(frame, {
+                        visibleRect: { x: cropPx.x, y: cropPx.y, width: cropPx.w, height: cropPx.h },
+                        timestamp: frame.timestamp,
+                    });
+                    controller.enqueue(cropped);
+                } catch (e) {
+                    controller.enqueue(frame.clone());
+                } finally {
+                    frame.close();
+                }
+            },
+        });
+        processor.readable.pipeThrough(transformer).pipeTo(generator.writable).catch((e) => {
+            console.warn('[Recorder] Region crop pipeline ended:', e?.message || e);
+        });
+        console.log(`[Recorder] Region crop active: ${cropPx.w}x${cropPx.h} @ (${cropPx.x},${cropPx.y})`);
+        return generator;
+    } catch (e) {
+        console.error('[Recorder] Failed to build region crop pipeline:', e);
+        regionCrop = null;
+        return null;
     }
 }
 
@@ -338,10 +464,21 @@ async function saveRecordingData() {
         const addedDuration = (Date.now() - recordingStartTime) / 1000;
         const newDuration = (existing && existing.duration ? existing.duration : 0) + addedDuration;
 
+        // Read the actual capture resolution off the live track (still open at this
+        // point — track.stop() runs after saveRecordingData() in both callers).
+        const captureSettings = globalDisplayStream?.getVideoTracks()[0]?.getSettings?.();
+        // Region recordings are stored at the cropped resolution.
+        const resolution = regionCropPx
+            ? regionCropPx
+            : (captureSettings?.width && captureSettings?.height
+                ? { width: captureSettings.width, height: captureSettings.height }
+                : (existing?.resolution || { width: 1920, height: 1080 }));
+
         await updateRecording(currentSessionId, {
             status: 'completed',
             duration: newDuration,
-            resolution: { width: 1920, height: 1080 },
+            resolution,
+            sourceCrop: regionCrop || existing?.sourceCrop || null,
             mimeType: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'video/webm',
             thumbnail: currentThumbnail || (existing ? existing.thumbnail : null)
         });

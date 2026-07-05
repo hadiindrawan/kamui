@@ -1,23 +1,9 @@
+@import '../../shared/styles/tokens.css';
+
 * {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
-}
-
-:root {
-    --color-base: #233D4D;
-    --color-base-dark: #1a2e3b;
-    --color-base-darker: #152530;
-    --color-base-light: #2d4f63;
-    --color-accent: #FE6D73;
-    --color-accent-hover: #ff8589;
-    --color-success: #17C3B2;
-    --color-warning: #FCB24D;
-    --color-text: #FFFFFF;
-    --color-text-muted: rgba(255, 255, 255, 0.6);
-    --color-bg-card: rgba(255, 255, 255, 0.05);
-    --color-border: rgba(255, 255, 255, 0.1);
-    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 body {
@@ -718,8 +704,8 @@ body {
             rgba(0, 0, 0, 0.6) 10px,
             rgba(0, 0, 0, 0.6) 20px);
     pointer-events: none;
-    border-left: 2px solid var(--color-warning);
-    border-right: 2px solid var(--color-warning);
+    border-left: 2px solid var(--warn);
+    border-right: 2px solid var(--warn);
 }
 
 .trim-region.trim-start {
@@ -733,7 +719,7 @@ body {
     top: -4px;
     bottom: -4px;
     width: 12px;
-    background: var(--color-warning);
+    background: var(--warn);
     cursor: ew-resize;
     transform: translateX(-50%);
     border-radius: 3px;
@@ -743,9 +729,9 @@ body {
 }
 
 .trim-handle:hover {
-    background: var(--color-accent);
+    background: var(--accent);
     transform: translateX(-50%) scaleX(1.3);
-    box-shadow: 0 4px 12px rgba(254, 109, 115, 0.4);
+    box-shadow: 0 4px 12px rgba(94, 105, 209, 0.4);
 }
 
 .trim-handle::before {
@@ -809,11 +795,11 @@ body {
 }
 
 .segment-rnd.segment-crop {
-    background: #3B82F6;
+    background: var(--info);
 }
 
 .segment-rnd.segment-trim {
-    background: var(--color-warning);
+    background: var(--warn);
 }
 
 .segment-rnd:hover {
@@ -989,7 +975,7 @@ body {
 
 /* Save Changes Section */
 .save-section {
-    background: rgba(254, 109, 115, 0.1);
+    background: rgba(94, 105, 209, 0.1);
     border: 1px solid var(--color-accent);
     border-radius: 8px;
 }
@@ -1014,7 +1000,7 @@ body {
 .btn-save-changes:hover {
     background: var(--color-accent-hover);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(254, 109, 115, 0.3);
+    box-shadow: 0 4px 12px rgba(94, 105, 209, 0.3);
 }
 
 .btn-save-changes:active {
@@ -1049,7 +1035,7 @@ body {
 .btn-save-changes-header:hover {
     background: var(--color-accent-hover);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(254, 109, 115, 0.3);
+    box-shadow: 0 4px 12px rgba(94, 105, 209, 0.3);
 }
 
 .btn-save-changes-header:active {
@@ -1063,13 +1049,13 @@ body {
 }
 
 .segment-selected .segment-content {
-    background: rgba(254, 109, 115, 0.2);
+    background: rgba(94, 105, 209, 0.2);
 }
 
 /* Custom Zoom UI */
 .segment-mode-toggle {
     display: flex;
-    background: #2a3b47;
+    background: var(--surface-2);
     border-radius: 6px;
     padding: 2px;
     gap: 2px;
@@ -1084,7 +1070,7 @@ body {
     padding: 6px;
     border: none;
     background: transparent;
-    color: #8da5b5;
+    color: var(--ink-subtle);
     font-size: 12px;
     cursor: pointer;
     border-radius: 4px;
@@ -1093,12 +1079,12 @@ body {
 
 .mode-btn:hover {
     background: rgba(255, 255, 255, 0.05);
-    color: #e6e6e6;
+    color: var(--ink-muted);
 }
 
 .mode-btn.active {
-    background: #0f1c23;
-    color: #FE6D73;
+    background: var(--surface-1);
+    color: var(--accent);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
@@ -1117,7 +1103,7 @@ body {
     position: absolute;
     top: -24px;
     left: 0;
-    background: #FE6D73;
+    background: var(--accent);
     color: white;
     font-size: 11px;
     font-weight: 600;
@@ -1127,16 +1113,39 @@ body {
     opacity: 0.9;
 }
 
+/* Crop Pan Overlay */
+.crop-overlay-container {
+    /* Positioned absolutely via inline styles in JS */
+}
+
+.crop-pan-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    color: white;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 10px;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 /* Background UI */
 .bg-checkered-preview {
     height: 48px;
     border-radius: 6px;
-    background-color: #2a3b47;
+    background-color: var(--surface-2);
     background-image:
-        linear-gradient(45deg, #374a56 25%, transparent 25%),
-        linear-gradient(-45deg, #374a56 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, #374a56 75%),
-        linear-gradient(-45deg, transparent 75%, #374a56 75%);
+        linear-gradient(45deg, var(--surface-4) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--surface-4) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--surface-4) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--surface-4) 75%);
     background-size: 16px 16px;
     background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
     overflow: hidden;
@@ -1205,6 +1214,80 @@ body {
     transform: scale(1.05);
 }
 
+.preset-btn.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(94, 105, 209, 0.4);
+}
+
+/* Social framing aspect-ratio presets */
+.aspect-preset-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    width: 100%;
+}
+
+.aspect-preset-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.aspect-preset-card:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--hairline-strong);
+}
+
+.aspect-preset-card.active {
+    background: rgba(94, 105, 209, 0.12);
+    border-color: var(--accent);
+}
+
+.aspect-preset-swatch {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 28px;
+}
+
+.aspect-preset-shape {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 100%;
+    max-height: 100%;
+    color: var(--ink-muted);
+}
+
+.aspect-preset-card.active .aspect-preset-shape {
+    color: var(--accent);
+}
+
+.aspect-preset-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink-muted);
+    text-align: center;
+    line-height: 1.2;
+}
+
+.aspect-preset-card.active .aspect-preset-label {
+    color: var(--ink);
+}
+
+.aspect-preset-hint {
+    font-size: 9px;
+    color: var(--ink-tertiary);
+}
+
 .checkbox-group {
     display: flex;
     gap: 16px;
@@ -1216,6 +1299,12 @@ body {
     color: var(--color-text-muted);
     margin-bottom: 4px;
     display: block;
+}
+
+.setting-hint {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin: -6px 0 12px;
 }
 
 /* Upload Dropzone */
@@ -1244,7 +1333,7 @@ body {
 
 .upload-dropzone:hover {
     border-color: var(--color-accent);
-    background: rgba(254, 109, 115, 0.05);
+    background: rgba(94, 105, 209, 0.05);
 }
 
 .upload-icon {

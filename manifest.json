@@ -1,19 +1,22 @@
 {
     "manifest_version": 3,
     "name": "Beunta - Smart Screen Recorder",
-    "version": "1.0.0",
-    "description": "Record your screen with smart cursor tracking and automatic zoom effects",
+    "version": "1.1.0",
+    "description": "Record your screen with smart cursor tracking, automatic zoom effects, and native device-framed recording",
+    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6cWe7p+YjLA6kSvI01KF5qprBXxRQ0v7+rpiaIKJ0tlM+cei6Zerhf8EvM8Yg+ghVKxSOZQoOA2yDuxEN+Oc0s3dnTJfUzpunzTElkvemy8FTP5VmAn92YUreEqmgGzR0hJ/B9kCKxYth+1b8okD50Gx4HHsfjhgESvmGiQplvAbkH7VxrS3VY7OVr7ZfmnT7z8jJZgC7zd/uknE2fLZrH6MOLO8i/GLmx+jl99c/NyT2CzfK4CIsGImosDU9wfUK1OlTJqgrgYemh0JaOUJeCWCUg4+kkRjB7zzZHmswf8RR10I1Eg286RIQnVXQ/06d2S9HsLxDvzm8tM/5QGMhQIDAQAB",
     "permissions": [
         "storage",
         "offscreen",
         "activeTab",
-        "scripting"
+        "scripting",
+        "nativeMessaging"
     ],
     "host_permissions": [
         "<all_urls>"
     ],
     "background": {
-        "service_worker": "service-worker.js"
+        "service_worker": "service-worker.js",
+        "type": "module"
     },
     "action": {
         "default_popup": "src/features/popup/index.html",

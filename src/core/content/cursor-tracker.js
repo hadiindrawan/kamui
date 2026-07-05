@@ -1,5 +1,6 @@
 // Content script for tracking cursor movements and events
 // Inspired by Cursorful.com architecture
+import { pruneClickCluster, isZoomWorthyClick, MIN_CLICKS_FOR_CLUSTER } from '../../shared/utils/interaction-classifier.js';
 
 (function () {
     'use strict';
@@ -16,10 +17,8 @@
     let keyPressCount = 0;
     let lastSelectionTime = 0;
 
-    // Smart zoom detection - cluster analysis
-    let recentClicks = []; // Track clicks in the last 3 seconds
-    const CLICK_CLUSTER_THRESHOLD = 3000; // 3 seconds
-    const MIN_CLICKS_FOR_ZOOM = 2; // Need at least 2 clicks to trigger zoom
+    // Smart zoom detection - cluster analysis (see shared/utils/interaction-classifier.js)
+    let recentClicks = []; // Track clicks within the cluster window
 
     // Follow-cursor mode
     let followCursorEnabled = true;
@@ -101,16 +100,19 @@
             window.innerHeight
         );
 
-        // Add to recent clicks for cluster detection
+        // Add to recent clicks for cluster detection, then drop stale ones
         recentClicks.push({ time: now, x: coords.x, y: coords.y });
+        recentClicks = pruneClickCluster(recentClicks, now);
 
-        // Remove clicks older than threshold
-        recentClicks = recentClicks.filter(click =>
-            now - click.time < CLICK_CLUSTER_THRESHOLD
-        );
-
-        // Detect if this is a "focus moment" worthy of auto-zoom
-        const shouldAutoZoom = detectFocusMoment(e, coords, now);
+        // Rules 1-3 (input/textarea, contentEditable, button/link) are always
+        // zoom-worthy; rule 4 (click cluster) is the shared fallback.
+        const isInputFocus = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+        const isContentEditable = e.target.isContentEditable || false;
+        const isInteractiveTarget = isInputFocus || isContentEditable ||
+            e.target.tagName === 'BUTTON' || e.target.tagName === 'A';
+        const shouldAutoZoom = isZoomWorthyClick({
+            x: coords.x, y: coords.y, recentClicks, hasInteractiveTarget: isInteractiveTarget
+        });
 
         const event = {
             type: shouldAutoZoom ? 'click' : 'click-minor', // Major vs minor clicks
@@ -118,11 +120,11 @@
             ...coords,
             target: e.target.tagName,
             button: e.button,
-            isInCluster: recentClicks.length >= MIN_CLICKS_FOR_ZOOM,
+            isInCluster: recentClicks.length >= MIN_CLICKS_FOR_CLUSTER,
             clusterSize: recentClicks.length,
             // Focus context
-            isInputFocus: e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA',
-            isContentEditable: e.target.isContentEditable || false
+            isInputFocus,
+            isContentEditable
         };
 
         events.push(event);
@@ -132,39 +134,6 @@
             sessionId: sessionId,
             event: event
         });
-    }
-
-    // Smart heuristic: Detect if this is a meaningful interaction
-    function detectFocusMoment(e, coords, now) {
-        // Rule 1: Click on input/textarea = always zoom
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-            return true;
-        }
-
-        // Rule 2: Click on contentEditable = always zoom
-        if (e.target.isContentEditable) {
-            return true;
-        }
-
-        // Rule 3: Click on button/link = zoom
-        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') {
-            return true;
-        }
-
-        // Rule 4: Part of a click cluster (rapid clicks in same area)
-        if (recentClicks.length >= MIN_CLICKS_FOR_ZOOM) {
-            // Check if clicks are clustered spatially (within 20% of viewport)
-            const avgX = recentClicks.reduce((sum, c) => sum + c.x, 0) / recentClicks.length;
-            const avgY = recentClicks.reduce((sum, c) => sum + c.y, 0) / recentClicks.length;
-            const distance = Math.sqrt(Math.pow(coords.x - avgX, 2) + Math.pow(coords.y - avgY, 2));
-
-            if (distance < 0.2) { // Within 20% of viewport
-                return true;
-            }
-        }
-
-        // Rule 5: Single clicks on generic elements = no zoom (reduces noise)
-        return false;
     }
 
     function onDoubleClick(e) {
