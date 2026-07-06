@@ -1,4 +1,4 @@
-import { segmentFromEvent, dedupeInteractionEvents, formatTime, INTERACTION_TYPES } from './useEditorState.js';
+import { segmentFromEvent, dedupeInteractionEvents, formatTime, INTERACTION_TYPES, resolvePlaybackAction } from './useEditorState.js';
 
 describe('INTERACTION_TYPES', () => {
     it('flags major interactions but not cursor movement or minor clicks', () => {
@@ -71,6 +71,42 @@ describe('segmentFromEvent', () => {
         );
         expect(segment.positionMode).toBe('fixed');
         expect(segment.type).toBe('typing');
+    });
+});
+
+describe('resolvePlaybackAction', () => {
+    const base = { segments: [], selectedSegmentId: null, trimStart: 0, trimEnd: 10 };
+
+    it('continues playback before the effective end is reached', () => {
+        expect(resolvePlaybackAction(5, { ...base, loopPlayback: false })).toEqual({ action: 'continue' });
+    });
+
+    it('pauses at trimEnd with no segment selected and loop off (previous behavior)', () => {
+        const result = resolvePlaybackAction(10, { ...base, loopPlayback: false });
+        expect(result).toEqual({ action: 'pause', time: 10 });
+    });
+
+    it('loops back to trimStart with no segment selected and global loop on', () => {
+        const result = resolvePlaybackAction(10, { ...base, trimStart: 2, loopPlayback: true });
+        expect(result).toEqual({ action: 'seek', time: 2 });
+    });
+
+    it('pauses at a selected segment\'s own end even though global loop is on (selection scopes playback)', () => {
+        const segments = [{ id: 'a', startTime: 1000, duration: 2000, loopMode: 'none' }];
+        const result = resolvePlaybackAction(3, { segments, selectedSegmentId: 'a', trimStart: 0, trimEnd: 10, loopPlayback: true });
+        expect(result).toEqual({ action: 'pause', time: 3 });
+    });
+
+    it('loops within a selected segment\'s own bounds when its loopMode is "loop"', () => {
+        const segments = [{ id: 'a', startTime: 1000, duration: 2000, loopMode: 'loop' }];
+        const result = resolvePlaybackAction(3, { segments, selectedSegmentId: 'a', trimStart: 0, trimEnd: 10, loopPlayback: false });
+        expect(result).toEqual({ action: 'seek', time: 1 });
+    });
+
+    it('clamps a selected segment\'s scoped end to trimEnd when the segment runs past the trim', () => {
+        const segments = [{ id: 'a', startTime: 1000, duration: 20000, loopMode: 'none' }];
+        const result = resolvePlaybackAction(10, { segments, selectedSegmentId: 'a', trimStart: 0, trimEnd: 10, loopPlayback: false });
+        expect(result).toEqual({ action: 'pause', time: 10 });
     });
 });
 

@@ -75,6 +75,51 @@ describe('calculateCameraPosition', () => {
         expect(camera.zoom).toBeGreaterThan(1);
         expect(camera.zoom).toBeLessThan(1.5);
     });
+
+    it('resolves a standalone crop segment the same way a zoom segment would (backward compat)', () => {
+        const events = [{ type: 'crop', time: 1000, x: 0.5, y: 0.5, cropWidth: 400, cropHeight: 400 }];
+        const camera = calculateCameraPosition(1400, events, dimensions);
+        expect(camera.srcW).toBe(400);
+        expect(camera.srcH).toBe(400);
+        expect(camera.srcX).toBeCloseTo(300); // centered on (0.5, 0.5) -> 500 - 400/2
+        expect(camera.srcY).toBeCloseTo(300);
+    });
+
+    it('composites a stacked zoom segment inside a crop segment on a different track', () => {
+        // Crop covers the left half of the frame; zoom pans within it toward its own corner.
+        const events = [
+            { type: 'crop', time: 1000, x: 0.25, y: 0.5, cropWidth: 500, cropHeight: 1000, trackId: 0 },
+            { type: 'click', time: 1000, x: 0.1, y: 0.1, trackId: 1, zoomLevel: 2 },
+        ];
+        const camera = calculateCameraPosition(1400, events, dimensions);
+        // Zoom's target rect (250x250 at videoWidth/2) must stay clamped inside the crop's [0,500]x[0,500] rect.
+        expect(camera.srcW).toBeLessThanOrEqual(500);
+        expect(camera.srcH).toBeLessThanOrEqual(500);
+        expect(camera.srcX).toBeGreaterThanOrEqual(0);
+        expect(camera.srcY).toBeGreaterThanOrEqual(0);
+        expect(camera.srcX + camera.srcW).toBeLessThanOrEqual(500.001);
+        expect(camera.srcY + camera.srcH).toBeLessThanOrEqual(500.001);
+    });
+
+    it('suppresses follow-cursor mode while a crop-only segment is active', () => {
+        const events = [
+            { type: 'crop', time: 1000, x: 0.5, y: 0.5, cropWidth: 400, cropHeight: 400 },
+            { type: 'follow', time: 1000, x: 0.9, y: 0.9 },
+        ];
+        const camera = calculateCameraPosition(1400, events, dimensions);
+        expect(camera.srcW).toBe(400);
+        expect(camera.srcH).toBe(400);
+    });
+
+    it('picks the highest-trackId segment when two same-type segments overlap', () => {
+        const events = [
+            { type: 'click', time: 1000, x: 0.2, y: 0.2, zoomLevel: 2, trackId: 0 },
+            { type: 'click', time: 1000, x: 0.8, y: 0.8, zoomLevel: 3, trackId: 1 },
+        ];
+        const camera = calculateCameraPosition(1400, events, dimensions);
+        // trackId 1's segment (zoomLevel 3) should win over trackId 0's (zoomLevel 2).
+        expect(camera.zoom).toBe(3);
+    });
 });
 
 describe('interpolateCamera', () => {

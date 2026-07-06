@@ -5,6 +5,7 @@ import CanvasPlayer from './components/CanvasPlayer.jsx';
 import Timeline from './components/Timeline.jsx';
 import EditorToolbar from './components/EditorToolbar.jsx';
 import SidebarSettings from './components/SidebarSettings.jsx';
+import SegmentInspector from './components/SegmentInspector.jsx';
 import FramingPanel from './components/FramingPanel.jsx';
 import ExportPanel from './components/ExportPanel.jsx';
 import ZoomTargetOverlay from './components/ZoomTargetOverlay.jsx';
@@ -18,8 +19,9 @@ export default function Editor() {
         canvasPlayerRef, canvasContainerRef,
         recording, loading, error,
         isPlaying, currentTime, duration,
-        handlePlayPause, handleTimeUpdate, handleFrameTime, registerPlayhead,
+        handlePlayPause, handleTimeUpdate, handlePlaybackEnded, handleFrameTime, registerPlayhead,
         handleDurationChange, handleVideoDimensions, handleSeek, handleSkip,
+        loopPlayback, setLoopPlayback,
         zoomLevel, setZoomLevel, zoomDuration, setZoomDuration, transitionDuration, setTransitionDuration,
         autoZoomIntensity, setAutoZoomIntensity, regenerateAutoZoom,
         playbackSpeed, setPlaybackSpeed,
@@ -29,8 +31,9 @@ export default function Editor() {
         showShadow, setShowShadow, showBorder, setShowBorder, borderRadius, setBorderRadius,
         isMuted, setIsMuted, showFollowCursor, setShowFollowCursor,
         trimStart, trimEnd, setTrimStart, setTrimEnd,
-        segments, selectedSegmentId, setSelectedSegmentId, addSegment, updateSegment, deleteSegment,
+        segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
         resetTimeline, handleUndo, handleRedo, saveHistory, handleTrimChange,
+        tracks, addTrack, removeTrack,
         hasPendingEdits, setHasPendingEdits, handleSaveChanges,
         isExporting, exportProgress, exportQuality, setExportQuality, exportScale, setExportScale,
         exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
@@ -111,7 +114,7 @@ export default function Editor() {
             />
 
             <main className="editor-main">
-                <div className="canvas-section" onClick={() => setSelectedSegmentId(null)}>
+                <div className="canvas-section" onClick={() => selectSegment(null)}>
                     <div className="canvas-container" ref={canvasContainerRef}>
                         <CanvasPlayer
                             ref={canvasPlayerRef}
@@ -139,6 +142,7 @@ export default function Editor() {
                             isMuted={isMuted}
                             showFollowCursor={showFollowCursor}
                             onTimeUpdate={handleTimeUpdate}
+                            onPlaybackEnded={handlePlaybackEnded}
                             onFrameTime={handleFrameTime}
                             onDurationChange={handleDurationChange}
                             onVideoDimensions={handleVideoDimensions}
@@ -165,30 +169,37 @@ export default function Editor() {
                 </div>
 
                 <aside className="sidebar">
-                    <SidebarSettings
-                        segments={segments}
-                        selectedSegmentId={selectedSegmentId}
-                        updateSegment={updateSegment}
-                        saveHistory={saveHistory}
-                        zoomLevel={zoomLevel}
-                        setZoomLevel={setZoomLevel}
-                        zoomDuration={zoomDuration}
-                        setZoomDuration={setZoomDuration}
-                        transitionDuration={transitionDuration}
-                        setTransitionDuration={setTransitionDuration}
-                        autoZoomIntensity={autoZoomIntensity}
-                        setAutoZoomIntensity={setAutoZoomIntensity}
-                        regenerateAutoZoom={regenerateAutoZoom}
-                        setHasPendingEdits={setHasPendingEdits}
-                        playbackSpeed={playbackSpeed}
-                        setPlaybackSpeed={setPlaybackSpeed}
-                        trimStart={trimStart}
-                        trimEnd={trimEnd}
-                        duration={duration}
-                        currentTime={currentTime}
-                        setTrimStart={setTrimStart}
-                        setTrimEnd={setTrimEnd}
-                    />
+                    {selectedSegment ? (
+                        <SegmentInspector
+                            segment={selectedSegment}
+                            segments={segments}
+                            updateSegment={updateSegment}
+                            saveHistory={saveHistory}
+                            tracks={tracks}
+                            onDeleteSegment={deleteSegment}
+                        />
+                    ) : (
+                        <SidebarSettings
+                            zoomLevel={zoomLevel}
+                            setZoomLevel={setZoomLevel}
+                            zoomDuration={zoomDuration}
+                            setZoomDuration={setZoomDuration}
+                            transitionDuration={transitionDuration}
+                            setTransitionDuration={setTransitionDuration}
+                            autoZoomIntensity={autoZoomIntensity}
+                            setAutoZoomIntensity={setAutoZoomIntensity}
+                            regenerateAutoZoom={regenerateAutoZoom}
+                            setHasPendingEdits={setHasPendingEdits}
+                            playbackSpeed={playbackSpeed}
+                            setPlaybackSpeed={setPlaybackSpeed}
+                            trimStart={trimStart}
+                            trimEnd={trimEnd}
+                            duration={duration}
+                            currentTime={currentTime}
+                            setTrimStart={setTrimStart}
+                            setTrimEnd={setTrimEnd}
+                        />
+                    )}
                     <FramingPanel
                         aspectRatio={aspectRatio}
                         setAspectRatio={setAspectRatio}
@@ -225,13 +236,16 @@ export default function Editor() {
                     currentTime={currentTime}
                     registerPlayhead={registerPlayhead}
                     segments={segments}
+                    tracks={tracks}
                     selectedSegmentId={selectedSegmentId}
                     trimStart={trimStart}
                     trimEnd={trimEnd || duration}
                     onSeek={handleSeek}
                     onAddSegment={addSegment}
+                    onAddTrack={addTrack}
+                    onRemoveTrack={removeTrack}
                     onUpdateSegment={updateSegment}
-                    onSelectSegment={setSelectedSegmentId}
+                    onSelectSegment={selectSegment}
                     onDeleteSegment={deleteSegment}
                     onResetTimeline={resetTimeline}
                     onTrimChange={handleTrimChange}
@@ -244,6 +258,8 @@ export default function Editor() {
                 isPlaying={isPlaying}
                 onPlayPause={handlePlayPause}
                 onSkip={handleSkip}
+                loopPlayback={loopPlayback}
+                setLoopPlayback={setLoopPlayback}
                 isMuted={isMuted}
                 setIsMuted={setIsMuted}
                 isExporting={isExporting}

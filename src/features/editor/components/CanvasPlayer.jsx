@@ -29,6 +29,7 @@ const CanvasPlayer = forwardRef(({
     showFollowCursor = false,
     cropZoom = 1,
     onTimeUpdate,
+    onPlaybackEnded,
     onFrameTime,
     onDurationChange,
     onVideoDimensions,
@@ -318,6 +319,8 @@ const CanvasPlayer = forwardRef(({
                         const nextVideo = videoRefs.current[idx + 1];
                         nextVideo.currentTime = 0;
                         if (isPlaying) nextVideo.play().catch(e => console.warn(e));
+                    } else if (onPlaybackEnded) {
+                        onPlaybackEnded();
                     }
                 };
 

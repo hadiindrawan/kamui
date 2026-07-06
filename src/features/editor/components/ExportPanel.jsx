@@ -1,9 +1,10 @@
 import React from 'react';
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Download } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Download, Repeat } from 'lucide-react';
 
 export default function ExportPanel({
     isPlaying, onPlayPause, onSkip,
     isMuted, setIsMuted,
+    loopPlayback, setLoopPlayback,
     isExporting, exportProgress,
     exportQuality, setExportQuality,
     exportFormat, setExportFormat,
@@ -22,6 +23,13 @@ export default function ExportPanel({
                 </button>
                 <button className="btn-control btn-small" onClick={() => onSkip(5)}>
                     <SkipForward size={18} />
+                </button>
+                <button
+                    className={`btn-control btn-small ${loopPlayback ? 'active' : ''}`}
+                    onClick={() => setLoopPlayback(!loopPlayback)}
+                    title={loopPlayback ? 'Disable loop' : 'Loop playback'}
+                >
+                    <Repeat size={18} />
                 </button>
                 <button
                     className="btn-control btn-small"

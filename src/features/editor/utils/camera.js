@@ -20,6 +20,65 @@ function denormalizeCoordinates(event, videoWidth, videoHeight) {
     };
 }
 
+// Resolves an event's target rect (position + size) at currentTimeMs, clamped
+// to an optional outer `bounds` rect (defaults to the full video). Used both
+// for zoom-type events (bounds = the active crop rect, if any) and crop-type
+// events (bounds = null, i.e. clamped to the full video).
+function resolveEventRect(event, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds) {
+    const kf = keyframeAnchor(event, currentTimeMs);
+    const pos = kf
+        ? { x: kf.x * videoWidth, y: kf.y * videoHeight }
+        : denormalizeCoordinates(event, videoWidth, videoHeight);
+
+    const eventZoomLevel = event.zoomLevel || zoomLevel;
+
+    let targetW, targetH;
+    if (event.type === 'crop' && event.cropWidth && event.cropHeight) {
+        targetW = event.cropWidth;
+        targetH = event.cropHeight;
+    } else {
+        targetW = videoWidth / eventZoomLevel;
+        targetH = videoHeight / eventZoomLevel;
+    }
+
+    const boundX = bounds ? bounds.x : 0;
+    const boundY = bounds ? bounds.y : 0;
+    const boundW = bounds ? bounds.w : videoWidth;
+    const boundH = bounds ? bounds.h : videoHeight;
+    // A target can't be larger than the bounds it's confined to (e.g. a zoom
+    // segment's default width when its crop bound is already tighter than it).
+    targetW = Math.min(targetW, boundW);
+    targetH = Math.min(targetH, boundH);
+
+    const targetX = pos.x - (targetW / 2);
+    const targetY = pos.y - (targetH / 2);
+    const clampedX = Math.max(boundX, Math.min(targetX, boundX + boundW - targetW));
+    const clampedY = Math.max(boundY, Math.min(targetY, boundY + boundH - targetH));
+
+    return { clampedX, clampedY, targetW, targetH, eventZoomLevel };
+}
+
+// Interpolates camera fields between a `from` rect (the resting/unzoomed
+// state) and a `to` rect (the fully-zoomed target) through zoom-in/hold/out.
+function applyPhase(phase, progress, from, to) {
+    const t = easeInOutQuart(progress);
+    if (phase === 'zoom-in') {
+        return {
+            srcX: lerp(from.x, to.x, t), srcY: lerp(from.y, to.y, t),
+            srcW: lerp(from.w, to.w, t), srcH: lerp(from.h, to.h, t),
+            zoom: lerp(from.zoom, to.zoom, t),
+        };
+    }
+    if (phase === 'zoom-out') {
+        return {
+            srcX: lerp(to.x, from.x, t), srcY: lerp(to.y, from.y, t),
+            srcW: lerp(to.w, from.w, t), srcH: lerp(to.h, from.h, t),
+            zoom: lerp(to.zoom, from.zoom, t),
+        };
+    }
+    return { srcX: to.x, srcY: to.y, srcW: to.w, srcH: to.h, zoom: to.zoom };
+}
+
 export function calculateCameraPosition(currentTimeMs, events, dimensions) {
     const {
         videoWidth,
@@ -38,73 +97,45 @@ export function calculateCameraPosition(currentTimeMs, events, dimensions) {
         zoom: 1
     };
 
-    // Find if we should be zooming based on events
-    const zoomTarget = findZoomTarget(currentTimeMs, events, {
-        zoomDuration,
-        transitionDuration
-    });
+    const settings = { zoomDuration, transitionDuration };
+    // Zoom-type and crop-type segments are resolved independently so they can
+    // stack on different tracks: the topmost crop segment sets the outer
+    // bounds, the topmost zoom segment pans/zooms within them.
+    const zoomTarget = findZoomTarget(currentTimeMs, events, settings);
+    const cropTarget = findCropTarget(currentTimeMs, events, settings);
+
+    const fullRect = { x: 0, y: 0, w: videoWidth, h: videoHeight, zoom: 1 };
+
+    // The crop's own animated rect (respecting its own zoom-in/hold/out timing).
+    // When present, this becomes both the camera's rest state for the zoom
+    // target (if any) and the camera itself when no zoom target is active.
+    let cropRect = null;
+    if (cropTarget) {
+        const rect = resolveEventRect(cropTarget.event, currentTimeMs, videoWidth, videoHeight, zoomLevel, null);
+        const targetRect = { x: rect.clampedX, y: rect.clampedY, w: rect.targetW, h: rect.targetH, zoom: rect.eventZoomLevel };
+        const applied = applyPhase(cropTarget.phase, cropTarget.progress, fullRect, targetRect);
+        cropRect = { x: applied.srcX, y: applied.srcY, w: applied.srcW, h: applied.srcH, zoom: applied.zoom };
+    }
 
     if (zoomTarget) {
         const { event, phase, progress } = zoomTarget;
-
-        // Denormalize coordinates to video dimensions. When the segment carries
-        // keyframes (a sustained session that pans between focus points), the
-        // anchor is evaluated along the smoothed keyframe path at the current
-        // time so the held zoom glides instead of jumping.
-        const kf = keyframeAnchor(event, currentTimeMs);
-        const pos = kf
-            ? { x: kf.x * videoWidth, y: kf.y * videoHeight }
-            : denormalizeCoordinates(event, videoWidth, videoHeight);
-
-        // Get zoom level from the event itself, or fall back to global zoom level
-        const eventZoomLevel = event.zoomLevel || zoomLevel;
-
-        // Calculate target zoom position (centered on cursor)
-        let targetW, targetH;
-
-        // For crop segments, use custom dimensions if provided
-        if (event.type === 'crop' && event.cropWidth && event.cropHeight) {
-            targetW = event.cropWidth;
-            targetH = event.cropHeight;
-        } else {
-            targetW = videoWidth / eventZoomLevel;
-            targetH = videoHeight / eventZoomLevel;
-        }
-
-        const targetX = pos.x - (targetW / 2);
-        const targetY = pos.y - (targetH / 2);
-
-        // Clamp to video bounds
-        const clampedX = Math.max(0, Math.min(targetX, videoWidth - targetW));
-        const clampedY = Math.max(0, Math.min(targetY, videoHeight - targetH));
-
-        // Apply smooth interpolation with easing
-        const t = easeInOutQuart(progress);
-
-        if (phase === 'zoom-in') {
-            camera.srcX = lerp(0, clampedX, t);
-            camera.srcY = lerp(0, clampedY, t);
-            camera.srcW = lerp(videoWidth, targetW, t);
-            camera.srcH = lerp(videoHeight, targetH, t);
-            camera.zoom = lerp(1, eventZoomLevel, t);
-        } else if (phase === 'zoom-hold') {
-            camera.srcX = clampedX;
-            camera.srcY = clampedY;
-            camera.srcW = targetW;
-            camera.srcH = targetH;
-            camera.zoom = eventZoomLevel;
-        } else if (phase === 'zoom-out') {
-            camera.srcX = lerp(clampedX, 0, t);
-            camera.srcY = lerp(clampedY, 0, t);
-            camera.srcW = lerp(targetW, videoWidth, t);
-            camera.srcH = lerp(targetH, videoHeight, t);
-            camera.zoom = lerp(eventZoomLevel, 1, t);
-        }
+        const bounds = cropRect ? { x: cropRect.x, y: cropRect.y, w: cropRect.w, h: cropRect.h } : null;
+        const rect = resolveEventRect(event, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds);
+        const targetRect = { x: rect.clampedX, y: rect.clampedY, w: rect.targetW, h: rect.targetH, zoom: rect.eventZoomLevel };
+        const restRect = cropRect || fullRect;
+        Object.assign(camera, applyPhase(phase, progress, restRect, targetRect));
+    } else if (cropRect) {
+        camera.srcX = cropRect.x;
+        camera.srcY = cropRect.y;
+        camera.srcW = cropRect.w;
+        camera.srcH = cropRect.h;
+        camera.zoom = cropRect.zoom;
     }
 
-    // Follow-cursor mode: Smooth camera panning
+    // Follow-cursor mode: Smooth camera panning (suppressed whenever a zoom or
+    // crop segment already has camera control).
     const followTarget = findFollowTarget(currentTimeMs, events);
-    if (followTarget && !zoomTarget) {
+    if (followTarget && !zoomTarget && !cropRect) {
         const pos = denormalizeCoordinates(followTarget, videoWidth, videoHeight);
 
         // Calculate follow camera (wider view than zoom)
@@ -141,43 +172,63 @@ export function interpolateCamera(current, target, factor = 0.1) {
     };
 }
 
+// Find focus moments: major clicks, typing, selections, focus (skip minor clicks).
+// Crop-type events are resolved separately by findCropTarget so the two can
+// stack independently.
 function findZoomTarget(currentTimeMs, events, settings) {
+    const zoomTypeEvents = events.filter(e =>
+        e.type === 'click' || e.type === 'dblclick' || e.type === 'zoom' ||
+        e.type === 'typing' || e.type === 'selection' || e.type === 'focus'
+    );
+    return findBestMatch(currentTimeMs, zoomTypeEvents, settings);
+}
+
+function findCropTarget(currentTimeMs, events, settings) {
+    const cropTypeEvents = events.filter(e => e.type === 'crop');
+    return findBestMatch(currentTimeMs, cropTypeEvents, settings);
+}
+
+// Among all events whose window covers currentTimeMs, keep the one on the
+// highest track (ties keep the last one in array order) - this is the
+// "topmost wins" stacking rule for same-type overlaps.
+function findBestMatch(currentTimeMs, focusEvents, settings) {
+    let best = null;
+    for (const event of focusEvents) {
+        const match = computeWindowMatch(currentTimeMs, event, settings);
+        if (!match) continue;
+        if (!best || (event.trackId ?? 0) >= (best.event.trackId ?? 0)) {
+            best = match;
+        }
+    }
+    return best;
+}
+
+function computeWindowMatch(currentTimeMs, event, settings) {
     const { zoomDuration, transitionDuration } = settings;
     const preZoomDuration = transitionDuration;
 
-    // Find focus moments: major clicks, typing, selections, focus (skip minor clicks)
-    const focusEvents = events.filter(e =>
-        e.type === 'click' || e.type === 'dblclick' || e.type === 'zoom' ||
-        e.type === 'crop' || e.type === 'typing' || e.type === 'selection' || e.type === 'focus'
-    );
+    const eventTime = event.time;
+    const eventDuration = event.duration || zoomDuration; // Use individual duration or fall back to global
+    const zoomStartTime = eventTime - preZoomDuration;
+    const zoomInEndTime = eventTime;
+    const zoomHoldEndTime = eventTime + eventDuration; // Use event's specific duration
+    const zoomOutEndTime = zoomHoldEndTime + transitionDuration;
 
-    // Take the LAST matching window so overlapping segments resolve to the most
-    // recent one (auto-zoom sessions and manual edits can overlap).
-    let match = null;
-    for (const event of focusEvents) {
-        const eventTime = event.time;
-        const eventDuration = event.duration || zoomDuration; // Use individual duration or fall back to global
-        const zoomStartTime = eventTime - preZoomDuration;
-        const zoomInEndTime = eventTime;
-        const zoomHoldEndTime = eventTime + eventDuration; // Use event's specific duration
-        const zoomOutEndTime = zoomHoldEndTime + transitionDuration;
-
-        if (currentTimeMs >= zoomStartTime && currentTimeMs < zoomOutEndTime) {
-            if (currentTimeMs < zoomInEndTime) {
-                const elapsed = currentTimeMs - zoomStartTime;
-                const progress = Math.max(0, Math.min(1, elapsed / preZoomDuration));
-                match = { event, phase: 'zoom-in', progress };
-            } else if (currentTimeMs < zoomHoldEndTime) {
-                match = { event, phase: 'zoom-hold', progress: 1 };
-            } else {
-                const elapsed = currentTimeMs - zoomHoldEndTime;
-                const progress = Math.max(0, Math.min(1, elapsed / transitionDuration));
-                match = { event, phase: 'zoom-out', progress };
-            }
+    if (currentTimeMs >= zoomStartTime && currentTimeMs < zoomOutEndTime) {
+        if (currentTimeMs < zoomInEndTime) {
+            const elapsed = currentTimeMs - zoomStartTime;
+            const progress = Math.max(0, Math.min(1, elapsed / preZoomDuration));
+            return { event, phase: 'zoom-in', progress };
+        } else if (currentTimeMs < zoomHoldEndTime) {
+            return { event, phase: 'zoom-hold', progress: 1 };
+        } else {
+            const elapsed = currentTimeMs - zoomHoldEndTime;
+            const progress = Math.max(0, Math.min(1, elapsed / transitionDuration));
+            return { event, phase: 'zoom-out', progress };
         }
     }
 
-    return match;
+    return null;
 }
 
 /**

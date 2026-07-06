@@ -19,6 +19,8 @@ export function segmentFromEvent(event, index, { zoomLevel, zoomDuration, positi
         absY: event.absY,
         viewportWidth: event.viewportWidth || 1920,
         viewportHeight: event.viewportHeight || 1080,
+        trackId: 0,
+        loopMode: 'none',
     };
 }
 
@@ -32,6 +34,50 @@ export function dedupeInteractionEvents(events) {
         }
     }
     return deduped;
+}
+
+// Ensures there's a track row for every trackId referenced by segments (so
+// recordings saved before multi-track existed, or with gaps, always render).
+function tracksFromSegments(segments, existingTracks = []) {
+    const maxTrackId = segments.reduce((max, seg) => Math.max(max, seg.trackId ?? 0), 0);
+    const tracks = [...existingTracks];
+    for (let i = 0; i <= maxTrackId; i++) {
+        if (!tracks.some((t) => t.id === i)) tracks.push({ id: i, label: `Track ${i + 1}` });
+    }
+    return tracks.length > 0 ? tracks.sort((a, b) => a.id - b.id) : [{ id: 0, label: 'Track 1' }];
+}
+
+/**
+ * Decides what should happen when playback time reaches the end of its
+ * active window. Priority order:
+ * 1. A selected segment scopes playback to its own [start, start+duration] -
+ *    reaching its end either loops back to its start (loopMode:'loop') or
+ *    pauses there, regardless of the global loop setting.
+ * 2. With no segment selected, reaching trimEnd loops to trimStart when
+ *    loopPlayback is on, otherwise pauses (previous behavior).
+ * Returns { action: 'continue' | 'seek' | 'pause', time? }.
+ */
+export function resolvePlaybackAction(time, { segments, selectedSegmentId, trimStart, trimEnd, loopPlayback }) {
+    const selectedSegment = segments.find((s) => s.id === selectedSegmentId);
+    const scopedStart = selectedSegment ? selectedSegment.startTime / 1000 : null;
+    const scopedEnd = selectedSegment ? (selectedSegment.startTime + selectedSegment.duration) / 1000 : null;
+    const effectiveEnd = scopedEnd !== null
+        ? (trimEnd > 0 ? Math.min(scopedEnd, trimEnd) : scopedEnd)
+        : trimEnd;
+
+    if (!(effectiveEnd > 0 && time >= effectiveEnd)) {
+        return { action: 'continue' };
+    }
+    if (scopedEnd !== null && selectedSegment?.loopMode === 'loop') {
+        return { action: 'seek', time: scopedStart };
+    }
+    if (scopedEnd !== null) {
+        return { action: 'pause', time: effectiveEnd };
+    }
+    if (loopPlayback) {
+        return { action: 'seek', time: trimStart };
+    }
+    return { action: 'pause', time: effectiveEnd };
 }
 
 export function formatTime(seconds) {
@@ -87,6 +133,8 @@ export function useEditorState() {
     const [trimEnd, setTrimEnd] = useState(0);
 
     const [segments, setSegments] = useState([]);
+    const [tracks, setTracks] = useState([{ id: 0, label: 'Track 1' }]);
+    const [loopPlayback, setLoopPlayback] = useState(false);
     const [history, setHistory] = useState([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
 
@@ -143,8 +191,11 @@ export function useEditorState() {
                     ...seg,
                     zoomLevel: seg.zoomLevel !== undefined ? seg.zoomLevel : 2,
                     positionMode: seg.positionMode || 'follow',
+                    trackId: seg.trackId !== undefined ? seg.trackId : 0,
+                    loopMode: seg.loopMode || 'none',
                 }));
                 setSegments(segmentsWithZoom);
+                setTracks((prev) => tracksFromSegments(segmentsWithZoom, rec.editorSettings?.tracks || prev));
                 setHistory([JSON.stringify(segmentsWithZoom)]);
                 setHistoryIndex(0);
                 hasInitializedSegments.current = true;
@@ -177,6 +228,7 @@ export function useEditorState() {
                 if (s.isMuted !== undefined) setIsMuted(s.isMuted);
                 if (s.trimStart !== undefined) setTrimStart(s.trimStart);
                 if (s.trimEnd !== undefined) setTrimEnd(s.trimEnd);
+                if (s.loopPlayback !== undefined) setLoopPlayback(s.loopPlayback);
             }
             setLoading(false);
         } catch (err) {
@@ -192,9 +244,12 @@ export function useEditorState() {
     }, []);
 
     // Build sustained auto-zoom sessions from the recording's interaction events.
+    // Auto-zoom segments always land on track 0 - trackId only matters once the
+    // user manually stacks a segment onto another track.
     const buildAutoZoomSegments = useCallback((events) => {
         const { zoomLevel: zl, idleReleaseMs } = resolveIntensity(autoZoomIntensity, zoomLevel);
-        return generateAutoZoomSegments(events || [], { zoomLevel: zl, idleReleaseMs });
+        return generateAutoZoomSegments(events || [], { zoomLevel: zl, idleReleaseMs })
+            .map((seg) => ({ ...seg, trackId: 0, loopMode: 'none' }));
     }, [autoZoomIntensity, zoomLevel]);
 
     // Initialize segments from recording events (only once when recording loads)
@@ -252,14 +307,25 @@ export function useEditorState() {
     const handlePlayPause = useCallback(() => setIsPlaying((prev) => !prev), []);
 
     const handleTimeUpdate = useCallback((time) => {
-        if (Number.isFinite(time)) {
-            setCurrentTime(time);
-            if (trimEnd > 0 && time >= trimEnd) {
-                setIsPlaying(false);
-                setCurrentTime(trimEnd);
-            }
+        if (!Number.isFinite(time)) return;
+        setCurrentTime(time);
+
+        const result = resolvePlaybackAction(time, { segments, selectedSegmentId, trimStart, trimEnd, loopPlayback });
+        if (result.action === 'seek') {
+            setCurrentTime(result.time);
+            canvasPlayerRef.current?.seekTo(result.time);
+        } else if (result.action === 'pause') {
+            setIsPlaying(false);
+            setCurrentTime(result.time);
         }
-    }, [trimEnd]);
+    }, [trimEnd, trimStart, loopPlayback, segments, selectedSegmentId]);
+
+    // Defensive backstop for the last-blob `onended` edge case in multi-blob
+    // sequential playback, where floating point can mean `ontimeupdate` never
+    // samples a value >= trimEnd before the video naturally ends.
+    const handlePlaybackEnded = useCallback(() => {
+        handleTimeUpdate(trimEnd || duration);
+    }, [handleTimeUpdate, trimEnd, duration]);
 
     const handleDurationChange = useCallback((dur) => {
         if (Number.isFinite(dur)) {
@@ -287,7 +353,7 @@ export function useEditorState() {
         }
     }, [currentTime, duration]);
 
-    const addSegment = useCallback((type = 'zoom') => {
+    const addSegment = useCallback((type = 'zoom', trackId = 0) => {
         const newSegment = {
             id: `seg_custom_${Date.now()}`,
             type,
@@ -300,6 +366,8 @@ export function useEditorState() {
             y: 0.5,
             viewportWidth: videoDimensions.width,
             viewportHeight: videoDimensions.height,
+            trackId,
+            loopMode: 'none',
         };
         const newSegments = [...segments, newSegment].sort((a, b) => a.startTime - b.startTime);
         setSegments(newSegments);
@@ -307,6 +375,35 @@ export function useEditorState() {
         saveHistory(newSegments);
         setSelectedSegmentId(newSegment.id);
     }, [currentTime, zoomDuration, zoomLevel, segments, videoDimensions, saveHistory]);
+
+    const addTrack = useCallback(() => {
+        setTracks((prev) => {
+            const nextId = prev.length ? Math.max(...prev.map((t) => t.id)) + 1 : 0;
+            return [...prev, { id: nextId, label: `Track ${nextId + 1}` }];
+        });
+    }, []);
+
+    const removeTrack = useCallback((trackId) => {
+        if (segments.some((seg) => (seg.trackId ?? 0) === trackId)) {
+            alert('Move or delete the segments on this track before removing it.');
+            return;
+        }
+        setTracks((prev) => (prev.length > 1 ? prev.filter((t) => t.id !== trackId) : prev));
+    }, [segments]);
+
+    // Selecting a segment jumps the playhead to its start and pauses, so the
+    // user immediately sees/hears the moment the segment governs. Deselecting
+    // (id === null) leaves the playhead where it is.
+    const selectSegment = useCallback((id) => {
+        setSelectedSegmentId(id);
+        if (!id) return;
+        const seg = segments.find((s) => s.id === id);
+        if (!seg) return;
+        const startSec = seg.startTime / 1000;
+        setCurrentTime(startSec);
+        setIsPlaying(false);
+        canvasPlayerRef.current?.seekTo(startSec);
+    }, [segments]);
 
     const updateSegment = useCallback((id, updates, shouldSaveToHistory = false) => {
         const newSegments = segments.map((seg) => (seg.id === id ? { ...seg, ...updates } : seg));
@@ -397,6 +494,8 @@ export function useEditorState() {
                         isMuted,
                         trimStart,
                         trimEnd,
+                        tracks,
+                        loopPlayback,
                     },
                 });
             }
@@ -407,7 +506,7 @@ export function useEditorState() {
         canvasPlayerRef.current?.seekTo(currentTime);
     }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, autoZoomIntensity, playbackSpeed, aspectRatio,
         backgroundMode, backgroundColor, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
-        showShadow, showBorder, borderRadius, isMuted, trimStart, trimEnd]);
+        showShadow, showBorder, borderRadius, isMuted, trimStart, trimEnd, tracks, loopPlayback]);
 
     const handleTrimChange = useCallback((start, end) => {
         setTrimStart(start);
@@ -624,7 +723,7 @@ export function useEditorState() {
         recording, loading, error,
         // playback
         isPlaying, currentTime, duration, videoDimensions,
-        handlePlayPause, handleTimeUpdate, handleFrameTime, registerPlayhead,
+        handlePlayPause, handleTimeUpdate, handlePlaybackEnded, handleFrameTime, registerPlayhead,
         handleDurationChange, handleVideoDimensions, handleSeek, handleSkip,
         // zoom settings
         zoomLevel, setZoomLevel, zoomDuration, setZoomDuration, transitionDuration, setTransitionDuration,
@@ -641,8 +740,10 @@ export function useEditorState() {
         // trim
         trimStart, setTrimStart, trimEnd, setTrimEnd, handleTrimChange,
         // segments + history
-        segments, selectedSegmentId, setSelectedSegmentId, addSegment, updateSegment, deleteSegment,
+        segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
         resetTimeline, handleUndo, handleRedo, saveHistory,
+        // tracks + loop
+        tracks, addTrack, removeTrack, loopPlayback, setLoopPlayback,
         // pending edits
         hasPendingEdits, setHasPendingEdits, savedSegments, handleSaveChanges,
         // export
