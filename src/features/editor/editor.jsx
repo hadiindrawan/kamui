@@ -11,9 +11,18 @@ import ExportPanel from './components/ExportPanel.jsx';
 import ZoomTargetOverlay from './components/ZoomTargetOverlay.jsx';
 import CropPanOverlay from './components/CropPanOverlay.jsx';
 import { useEditorState } from './hooks/useEditorState.js';
+import { ToastProvider } from '../../shared/components/Toast.jsx';
 import './editor.css';
 
 export default function Editor() {
+    return (
+        <ToastProvider>
+            <EditorContent />
+        </ToastProvider>
+    );
+}
+
+function EditorContent() {
     const state = useEditorState();
     const {
         canvasPlayerRef, canvasContainerRef,
@@ -35,7 +44,7 @@ export default function Editor() {
         resetTimeline, handleUndo, handleRedo, saveHistory, handleTrimChange,
         tracks, addTrack, removeTrack,
         hasPendingEdits, setHasPendingEdits, handleSaveChanges,
-        isExporting, exportProgress, exportQuality, setExportQuality, exportScale, setExportScale,
+        isExporting, exportProgress, exportResolution, setExportResolution,
         exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
         handleFileUpload,
         getVideoRect, getFrameRect, getVisibleVideoRect, getSceneLayout,
@@ -264,12 +273,10 @@ export default function Editor() {
                 setIsMuted={setIsMuted}
                 isExporting={isExporting}
                 exportProgress={exportProgress}
-                exportQuality={exportQuality}
-                setExportQuality={setExportQuality}
+                exportResolution={exportResolution}
+                setExportResolution={setExportResolution}
                 exportFormat={exportFormat}
                 setExportFormat={setExportFormat}
-                exportScale={exportScale}
-                setExportScale={setExportScale}
                 conversionService={conversionService}
                 setConversionService={setConversionService}
                 onExport={handleExport}

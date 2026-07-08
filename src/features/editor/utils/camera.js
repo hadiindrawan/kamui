@@ -172,6 +172,17 @@ export function interpolateCamera(current, target, factor = 0.1) {
     };
 }
 
+// Frame-rate-independent camera smoothing: converts elapsed wall-clock time
+// into an exponential-decay factor so preview (variable rAF cadence) and
+// export (constant-fps cadence) converge to the same camera position at the
+// same wall-clock time, instead of drifting apart with a fixed per-frame
+// factor. `tau` is the time constant in ms (time to close ~63% of the gap).
+export function interpolateCameraByTime(current, target, dtMs, tau = 70) {
+    if (!current || !Number.isFinite(dtMs) || dtMs <= 0) return target;
+    const factor = 1 - Math.exp(-dtMs / tau);
+    return interpolateCamera(current, target, factor);
+}
+
 // Find focus moments: major clicks, typing, selections, focus (skip minor clicks).
 // Crop-type events are resolved separately by findCropTarget so the two can
 // stack independently.

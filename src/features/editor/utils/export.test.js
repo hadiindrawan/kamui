@@ -20,11 +20,25 @@ describe('calculateCanvasSize', () => {
         expect(calculateCanvasSize(1280, 720, 'Native')).toEqual({ width: 1280, height: 720 });
     });
 
-    it('applies the export scale multiplier on top of the standard resolution', () => {
-        expect(calculateCanvasSize(1920, 1080, '9:16', 2)).toEqual({ width: 2160, height: 3840 });
+    it('reaches a higher resolution preset (e.g. 4K) by scaling the standard resolution', () => {
+        expect(calculateCanvasSize(1920, 1080, '9:16', 2160)).toEqual({ width: 2160, height: 3840 });
+        expect(calculateCanvasSize(1920, 1080, '16:9', 2160)).toEqual({ width: 3840, height: 2160 });
+    });
+
+    it('scales down to a lower resolution preset (e.g. 720p)', () => {
+        expect(calculateCanvasSize(1920, 1080, '16:9', 720)).toEqual({ width: 1280, height: 720 });
+    });
+
+    it('never upscales Native beyond the source resolution', () => {
+        // Source is only 720p; requesting 4K on Native must not fabricate pixels.
+        expect(calculateCanvasSize(1280, 720, 'Native', 2160)).toEqual({ width: 1280, height: 720 });
+    });
+
+    it('downscales Native when the requested resolution is smaller than the source', () => {
+        expect(calculateCanvasSize(1920, 1080, 'Native', 720)).toEqual({ width: 1280, height: 720 });
     });
 
     it('floors dimensions to even numbers (required by most video codecs)', () => {
-        expect(calculateCanvasSize(641, 361, 'Native', 1)).toEqual({ width: 640, height: 360 });
+        expect(calculateCanvasSize(641, 361, 'Native', 1080)).toEqual({ width: 640, height: 360 });
     });
 });

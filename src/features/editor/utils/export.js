@@ -1,168 +1,26 @@
-// MP4 video export using canvas frame capture and backend API conversion
-import { calculateCameraPosition, interpolateCamera } from './camera.js';
-import { getAspectRatioValue, STANDARD_RESOLUTIONS } from './coordinates.js';
+// MP4/WebM video export using mediabunny, constant-frame-rate compositing
+import { calculateCameraPosition, interpolateCameraByTime } from './camera.js';
+import { getAspectRatioValue } from './coordinates.js';
 import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from './scene-renderer.js';
-import { conversionAPI, APIError } from '../../../core/services/api-client.js';
-import { config, isBackendConversionEnabled } from '../../../shared/config.js';
-
 
 export async function exportVideoMP4(recording, settings, onProgress) {
-    const {
-        zoomLevel = 2,
-        zoomDuration = 800,
-        transitionDuration = 300,
-        segments = [],
-        trimStart = 0,
-        trimEnd,
-        playbackSpeed = 1,
-        bitrate = 4000000, // Optimized default for better efficiency (4Mbps)
-        fps = 30,
-        exportQuality = 'high',
-        exportScale = 1,
-        aspectRatio = '16:9',
-        backgroundColor = '#1a2e3b',
-        backgroundMode = 'hidden',
-        backgroundValue = null,
-        backgroundBlur = 'none',
-        insetPadding = 0,
-        cropToFill = false,
-        cropPanX = 0.5,
-        cropPanY = 0.5,
-        cropZoom = 1,
-        showShadow = false,
-        showBorder = false,
-        showFollowCursor = false,
-        conversionService = 'local'
-    } = settings;
+    const { conversionService = 'local', format = 'mp4' } = settings;
 
-            // STEP 1: Preload assets and calculate scene
-            let backgroundImage = null;
-            if (backgroundMode === 'image' && backgroundValue) {
-                backgroundImage = await preloadImage(backgroundValue);
-            }
+    if (conversionService === 'cloud') {
+        throw new Error('Cloud export is coming soon. Please use local export.');
+    }
 
-            // STEP 2: Use Single-Pass High Performance Pipeline if MP4 is requested and Local is available
-            if (settings.format === 'mp4' && conversionService === 'local') {
-                console.log('[Export] Using High Performance Single-Pass Pipeline');
-                const mp4Blob = await runLocalConversion({
-                    recording,
-                    settings,
-                    backgroundImage,
-                    onProgress
-                });
-                
-                onProgress(100);
-                downloadBlob(mp4Blob, `beunta_${Date.now()}.mp4`);
-                
-                setTimeout(() => {
-                    alert(`✅ Video exported as MP4!\n\nSuccessfully converted using High-Performance Direct Mode.`);
-                }, 500);
+    let backgroundImage = null;
+    if (settings.backgroundMode === 'image' && settings.backgroundValue) {
+        backgroundImage = await preloadImage(settings.backgroundValue);
+    }
 
-                return;
-            }
+    const blob = await runLocalConversion({ recording, settings, backgroundImage, onProgress });
+    onProgress(100);
 
-            // --- LEGACY/FALLBACK WEBM CAPTURE (Real-time) ---
-            // This is still used for WebM exports or if specific fallbacks occur
-            console.log('[Export] Using real-time capture fallback (WebM)');
-            
-            const canvas = document.createElement('canvas');
-            const video = document.createElement('video');
-            const videoUrl = URL.createObjectURL(recording.videoBlob);
-            video.src = videoUrl;
-            video.muted = true;
-            
-            await new Promise((res, rej) => {
-                video.onloadedmetadata = () => {
-                    const { width, height } = calculateCanvasSize(video.videoWidth, video.videoHeight, aspectRatio, exportScale);
-                    canvas.width = width;
-                    canvas.height = height;
-                    res();
-                };
-                video.onerror = rej;
-            });
-
-            const ctx = canvas.getContext('2d', { alpha: false });
-            const actualTrimEnd = trimEnd || video.duration;
-            const stream = canvas.captureStream(fps);
-            
-            // Add audio to legacy stream
-            try {
-                if (!settings.isMuted) {
-                    const videoStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
-                    if (videoStream && videoStream.getAudioTracks().length > 0) {
-                        stream.addTrack(videoStream.getAudioTracks()[0]);
-                    }
-                }
-            } catch (e) {}
-
-            let recordMime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm;codecs=vp8,opus';
-            const mediaRecorder = new MediaRecorder(stream, { mimeType: recordMime, videoBitsPerSecond: bitrate });
-            const chunks = [];
-            
-            mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-            const webmPromise = new Promise(r => mediaRecorder.onstop = () => r(new Blob(chunks, { type: recordMime })));
-            
-            mediaRecorder.start();
-            video.currentTime = trimStart;
-            video.playbackRate = playbackSpeed;
-            await new Promise(r => video.onseeked = r);
-            video.play();
-
-            // Constants for rendering setup. The legacy path draws the raw
-            // <video> element directly (no upstream cropping), so the shared
-            // scene renderer applies the source-rect crop itself.
-            const model = buildSceneModel({
-                videoWidth: video.videoWidth,
-                videoHeight: video.videoHeight,
-                settings,
-                segments: settings.segments || [],
-                recordingEvents: recording?.events || [],
-            });
-            const bgBuffer = document.createElement('canvas');
-            renderBackgroundBuffer(bgBuffer, model.layout, settings, backgroundImage);
-            const scaleX = canvas.width / model.layout.width;
-            const scaleY = canvas.height / model.layout.height;
-            let lastCamera = null;
-
-            const legacyRenderLoop = () => {
-                if (video.currentTime >= actualTrimEnd || video.ended || video.paused) {
-                    mediaRecorder.stop();
-                    return;
-                }
-
-                const currentTimeMs = video.currentTime * 1000;
-                onProgress(Math.min(70, 10 + ((video.currentTime - trimStart) / (actualTrimEnd - trimStart)) * 60));
-
-                const targetCamera = calculateCameraPosition(currentTimeMs, model.events, model.cameraConfig);
-                const camera = interpolateCamera(lastCamera, targetCamera, 0.15);
-                lastCamera = camera;
-
-                ctx.save();
-                ctx.scale(scaleX, scaleY);
-                drawSceneFrame(ctx, video, currentTimeMs, model, {
-                    camera, backgroundBuffer: bgBuffer,
-                    showShadow, showBorder, borderRadius: settings.borderRadius || 0,
-                    backgroundMode,
-                });
-                ctx.restore();
-                requestAnimationFrame(legacyRenderLoop);
-            };
-
-            legacyRenderLoop();
-            const webmBlob = await webmPromise;
-            URL.revokeObjectURL(videoUrl);
-
-            // If user wanted MP4 but we were in legacy mode, try cloud/local fallback here
-            if (settings.format === 'mp4') {
-                // ... Backend logic ...
-                // For brevity, we'll just download WebM if legacy was used (unlikely for MP4 now)
-            }
-
-            onProgress(100);
-            downloadBlob(webmBlob, `beunta_${Date.now()}.webm`);
-            return;
+    const extension = format === 'webm' ? 'webm' : 'mp4';
+    downloadBlob(blob, `beunta_${Date.now()}.${extension}`);
 }
-
 
 // Alias for backward compatibility
 export async function exportVideoWebM(recording, settings, onProgress) {
@@ -190,22 +48,28 @@ function downloadBlob(blob, filename) {
 }
 
 /**
- * Client-side MP4 conversion using mediabunny (High-Performance Single-Pass Mode)
+ * Client-side MP4/WebM conversion using mediabunny. Both formats go through
+ * this single pipeline: mediabunny is told a fixed `frameRate` so it pads/
+ * dedupes frames to constant-frame-rate output (the source screen recording
+ * is variable-frame-rate, since getDisplayMedia only emits a frame when the
+ * screen changes). Without this, the zoom/pan camera animation is sampled at
+ * the source's irregular frame timestamps, producing visible stutter that
+ * the rAF-driven live preview never has.
  */
 async function runLocalConversion({ recording, settings, backgroundImage, onProgress }) {
-    console.log('[Export] Initializing High-Performance local conversion...');
-    
-    // Dynamic imports for scalability
-    const { 
-        Conversion, Input, Output, 
-        BlobSource, BufferTarget, Mp4OutputFormat,
+    const {
+        Conversion, Input, Output,
+        BlobSource, BufferTarget, Mp4OutputFormat, WebMOutputFormat,
         ALL_FORMATS, canEncodeAudio, QUALITY_HIGH
     } = await import('mediabunny');
-    
-    const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
 
-    if (!(await canEncodeAudio('aac'))) {
-        registerAacEncoder();
+    const isWebM = settings.format === 'webm';
+
+    if (!isWebM) {
+        const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
+        if (!(await canEncodeAudio('aac'))) {
+            registerAacEncoder();
+        }
     }
 
     const input = new Input({
@@ -213,16 +77,16 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
         formats: ALL_FORMATS
     });
 
-    // Determine dimensions
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error('No video track found in source');
-    
-    const { width: canvasW, height: canvasH } = calculateCanvasSize(videoTrack.squarePixelWidth, videoTrack.squarePixelHeight, settings.aspectRatio, settings.exportScale || 1);
-    
+
+    const targetResolution = settings.targetResolution || 1080;
+    const { width: canvasW, height: canvasH } = calculateCanvasSize(videoTrack.squarePixelWidth, videoTrack.squarePixelHeight, settings.aspectRatio, targetResolution);
+
     const target = new BufferTarget();
     const output = new Output({
-        format: new Mp4OutputFormat(),
-        target: target
+        format: isWebM ? new WebMOutputFormat() : new Mp4OutputFormat(),
+        target
     });
 
     const videoW = videoTrack.squarePixelWidth;
@@ -242,7 +106,7 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     });
     let lastCamera = null;
 
-    // Output/composite canvas at the final (possibly exportScale-d) resolution.
+    // Output/composite canvas at the final target resolution.
     const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(canvasW, canvasH) : document.createElement('canvas');
     if (!(canvas instanceof OffscreenCanvas)) {
         canvas.width = canvasW; canvas.height = canvasH;
@@ -250,7 +114,7 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     const ctx = canvas.getContext('2d', { alpha: false });
 
     // Pre-render background once at layout (native) resolution; the per-frame
-    // exportScale transform upscales it along with everything else.
+    // scale transform upscales it along with everything else.
     const backgroundBuffer = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
     renderBackgroundBuffer(backgroundBuffer, model.layout, settings, backgroundImage);
 
@@ -262,9 +126,12 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     }
     const srcCtx = srcCanvas.getContext('2d', { alpha: false });
 
-    // exportScale (and even-dimension rounding) folded into one outer scale.
+    // Target resolution (and even-dimension rounding) folded into one outer scale.
     const scaleX = canvasW / model.layout.width;
     const scaleY = canvasH / model.layout.height;
+
+    const fps = settings.fps || 60;
+    const frameDurationMs = 1000 / fps;
 
     const conversion = await Conversion.init({
         input,
@@ -274,17 +141,20 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
             end: settings.trimEnd || undefined
         },
         video: {
-            codec: 'avc',
+            codec: isWebM ? 'vp9' : 'avc',
             processedWidth: canvasW,
             processedHeight: canvasH,
+            frameRate: fps,
             bitrate: settings.bitrate || QUALITY_HIGH,
-            preset: settings.preset || 'medium',
             hardwareAcceleration: 'no-preference',
             process: (sample) => {
                 const currentTimeMs = sample.timestamp * 1000;
 
+                // Constant frame spacing (guaranteed by the `frameRate` option
+                // above) means the camera can smooth over a fixed dt instead of
+                // the source's irregular sample spacing.
                 const targetCamera = calculateCameraPosition(currentTimeMs, model.events, model.cameraConfig);
-                const camera = interpolateCamera(lastCamera, targetCamera, 0.15);
+                const camera = interpolateCameraByTime(lastCamera, targetCamera, frameDurationMs);
                 lastCamera = camera;
 
                 // Blit the raw frame to the source canvas at native resolution.
@@ -306,7 +176,7 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
             }
         },
         audio: settings.isMuted ? { discard: true } : {
-            codec: 'aac'
+            codec: isWebM ? 'opus' : 'aac'
         }
     });
 
@@ -314,34 +184,41 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
 
     conversion.onProgress = (progress) => onProgress(Math.round(progress * 100));
     await conversion.execute();
-    
-    return new Blob([target.buffer], { type: 'video/mp4' });
+
+    return new Blob([target.buffer], { type: isWebM ? 'video/webm' : 'video/mp4' });
 }
 
-// Logic separation for better maintainability and performance
-export function calculateCanvasSize(videoW, videoH, aspectRatio, exportScale = 1) {
-    let canvasW = videoW;
-    let canvasH = videoH;
+// Maps a resolution preset (the target pixel count on the frame's short
+// edge - e.g. 1080 for "1080p", matching how vertical/square video
+// resolutions are conventionally named) + aspect ratio to a final
+// even-dimensioned canvas size.
+//
+// Standard aspect ratios (16:9, 9:16, 1:1, 4:5) always reframe to that short
+// edge regardless of source size - their fixed ratios all have a short edge
+// of 1080 (see STANDARD_RESOLUTIONS in coordinates.js), so scaling relative
+// to that 1080 baseline reaches the requested preset exactly (e.g. 2160 ->
+// 4K). 'Native' preserves the source's own aspect ratio and short edge,
+// clamped so it never upscales beyond the source's actual resolution.
+export function calculateCanvasSize(videoW, videoH, aspectRatio, targetResolution = 1080) {
+    let canvasW, canvasH;
 
-    if (aspectRatio !== 'Native') {
-        const standard = STANDARD_RESOLUTIONS[aspectRatio];
-        if (standard) {
-            canvasW = standard.width;
-            canvasH = standard.height;
+    if (aspectRatio === 'Native') {
+        const videoShortSide = Math.min(videoW, videoH);
+        const shortSide = Math.min(targetResolution, videoShortSide);
+        const scale = shortSide / videoShortSide;
+        canvasW = videoW * scale;
+        canvasH = videoH * scale;
+    } else {
+        const targetRatio = getAspectRatioValue(aspectRatio, videoW / videoH); // width/height
+        const scale = targetResolution / 1080;
+        if (targetRatio >= 1) {
+            canvasH = 1080 * scale;
+            canvasW = canvasH * targetRatio;
         } else {
-            const targetRatio = getAspectRatioValue(aspectRatio, videoW / videoH);
-            if (targetRatio >= 1) {
-                canvasH = videoH;
-                canvasW = canvasH * targetRatio;
-            } else {
-                canvasW = videoH;
-                canvasH = canvasW / targetRatio;
-            }
+            canvasW = 1080 * scale;
+            canvasH = canvasW / targetRatio;
         }
     }
-
-    canvasW *= exportScale;
-    canvasH *= exportScale;
 
     return {
         width: Math.floor(canvasW / 2) * 2,

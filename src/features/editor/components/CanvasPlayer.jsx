@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
-import { calculateCameraPosition, interpolateCamera } from '../utils/camera.js';
+import { calculateCameraPosition, interpolateCameraByTime } from '../utils/camera.js';
 import { interpolateSceneLayout } from '../utils/coordinates.js';
 import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from '../utils/scene-renderer.js';
 
@@ -45,6 +45,7 @@ const CanvasPlayer = forwardRef(({
     const lastRecordingIdRef = useRef(null); // Fix: Prevent redundant setup
     const rafRef = useRef(null);
     const lastCameraRef = useRef(null);
+    const lastCameraTsRef = useRef(null); // wall-clock ts of the last camera sample, for frame-rate-independent smoothing
     const containerRef = useRef(null);
     const backgroundImageRef = useRef(null);
     const backgroundBufferRef = useRef(null); // Cache blurred/rendered background
@@ -397,9 +398,13 @@ const CanvasPlayer = forwardRef(({
             : { ...model.cameraConfig, videoWidth: layout.width, videoHeight: layout.height, canvasWidth: layout.width, canvasHeight: layout.height };
 
         const targetCamera = calculateCameraPosition(currentTimeMs, model.events, cameraConfig);
-        const factor = isPlaying ? 0.12 : 1.0;
-        const camera = interpolateCamera(lastCameraRef.current, targetCamera, factor);
+        const nowTs = performance.now();
+        const dtMs = isPlaying && lastCameraTsRef.current != null ? nowTs - lastCameraTsRef.current : null;
+        const camera = dtMs != null
+            ? interpolateCameraByTime(lastCameraRef.current, targetCamera, dtMs)
+            : targetCamera;
         lastCameraRef.current = camera;
+        lastCameraTsRef.current = nowTs;
 
         drawSceneFrame(ctx, video, currentTimeMs, model, {
             layout,

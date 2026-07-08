@@ -83,6 +83,50 @@ function nativeBridgeConnect() {
                 .catch((e) => log.error('Failed to open recordings page:', e));
         }
 
+        // Recording control from the tray "Start"/"Stop" items or the global
+        // hotkey. The native app can't capture on its own (all video is the
+        // browser's getDisplayMedia), so it asks us to drive the existing flow.
+        if (message.type === 'REQUEST_START_RECORDING') {
+            if (recordingState.isRecording) {
+                log.info('Native requested Start, but already recording — ignoring.');
+            } else {
+                log.info('Native tray/hotkey requested Start Recording.');
+                // Bring Chrome to the OS foreground so the getDisplayMedia
+                // share-picker (which the start flow raises) is visible even
+                // when another app had focus.
+                chrome.windows.getLastFocused()
+                    .then((win) => chrome.windows.update(win.id, { focused: true }))
+                    .catch(() => {});
+                // Reuse the existing native-mode start path — it self-resolves
+                // the active tab via chrome.tabs.query, so no sender is needed
+                // (same pattern as handleRegionSelected reusing handleStartRecording).
+                handleNativeStartRecording(
+                    { recordingMode: 'native', micEnabled: false, quality: currentQuality },
+                    null,
+                    () => {},
+                );
+                // Let an open popup (if any) reflect that recording began.
+                chrome.runtime.sendMessage({ type: 'RECORDING_STARTED' }).catch(() => {});
+            }
+        }
+
+        if (message.type === 'REQUEST_STOP_RECORDING') {
+            if (!recordingState.isRecording) {
+                log.info('Native requested Stop, but not recording — ignoring.');
+            } else {
+                log.info('Native tray/hotkey requested Stop Recording.');
+                // Mode-agnostic: route like the STOP_RECORDING message so a
+                // browser-mode recording started from the popup can also be
+                // stopped from the tray/hotkey, not just native-mode ones.
+                const mode = recordingState.recordingMode || 'browser';
+                if (mode === 'native') {
+                    handleNativeStopRecording({}, null, () => {});
+                } else {
+                    handleStopRecording({}, null, () => {});
+                }
+            }
+        }
+
         // Call any registered type-specific listener (cursor/click ingestion, etc.)
         const handler = nativeListeners.get(message.type);
         if (handler) handler(message);
@@ -383,7 +427,11 @@ async function finishNativeRecording() {
     recordingState = { isRecording: false, currentSessionId: null, tabId: null, recordingMode: 'native', nativeConnected: false };
     sendAppStateToNative();
 
-    await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
+    // tabs.create() alone only activates the tab *within* Chrome — it doesn't
+    // bring the Chrome window to the OS foreground when another app (e.g. one
+    // focused via a hotkey-triggered stop) currently has focus.
+    const editorTab = await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
+    chrome.windows.update(editorTab.windowId, { focused: true }).catch(() => {});
     log.info('Native recording finalized, saved as:', recordingId);
     return { sessionId, recordingId };
 }
@@ -606,7 +654,10 @@ async function finishBrowserRecording() {
 
     recordingState = { isRecording: false, currentSessionId: null, tabId: null };
     sendAppStateToNative();
-    await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
+    // See the equivalent comment in finishNativeRecording() — tabs.create()
+    // alone doesn't foreground the Chrome window itself.
+    const editorTab = await chrome.tabs.create({ url: `src/features/editor/index.html?id=${recordingId}` });
+    chrome.windows.update(editorTab.windowId, { focused: true }).catch(() => {});
     return { sessionId, recordingId };
 }
 

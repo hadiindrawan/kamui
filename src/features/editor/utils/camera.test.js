@@ -1,4 +1,4 @@
-import { calculateCameraPosition, interpolateCamera, smoothCursorPosition } from './camera.js';
+import { calculateCameraPosition, interpolateCamera, interpolateCameraByTime, smoothCursorPosition } from './camera.js';
 
 const dimensions = { videoWidth: 1000, videoHeight: 1000, zoomLevel: 2, zoomDuration: 800, transitionDuration: 300 };
 
@@ -140,6 +140,38 @@ describe('interpolateCamera', () => {
         const current = { srcX: 0, srcY: 0, srcW: 1000, srcH: 1000, zoom: 1 };
         const target = { srcX: 100, srcY: 100, srcW: 500, srcH: 500, zoom: 2 };
         expect(interpolateCamera(current, target, 1.0)).toEqual(target);
+    });
+});
+
+describe('interpolateCameraByTime', () => {
+    const current = { srcX: 0, srcY: 0, srcW: 1000, srcH: 1000, zoom: 1 };
+    const target = { srcX: 100, srcY: 100, srcW: 500, srcH: 500, zoom: 2 };
+
+    it('returns the target directly when there is no current camera', () => {
+        expect(interpolateCameraByTime(null, target, 16.7)).toEqual(target);
+    });
+
+    it('moves partway from current to target, converging further with a longer dt', () => {
+        const small = interpolateCameraByTime(current, target, 16.7); // ~60fps frame
+        const large = interpolateCameraByTime(current, target, 200);
+        expect(small.srcX).toBeGreaterThan(0);
+        expect(small.srcX).toBeLessThan(large.srcX);
+        expect(large.srcX).toBeLessThan(target.srcX);
+    });
+
+    it('produces the same camera position for the same elapsed time regardless of how many steps it took', () => {
+        // 60fps preview stepping twice (2 * 16.7ms) should land close to a
+        // single 30fps export step of 33.3ms - this is the frame-rate
+        // independence that keeps preview and export motion in sync.
+        let twoSteps = interpolateCameraByTime(current, target, 16.7);
+        twoSteps = interpolateCameraByTime(twoSteps, target, 16.7);
+        const oneStep = interpolateCameraByTime(current, target, 33.4);
+        expect(twoSteps.srcX).toBeCloseTo(oneStep.srcX, 1);
+    });
+
+    it('treats a non-positive or non-finite dt as an instant snap', () => {
+        expect(interpolateCameraByTime(current, target, 0)).toEqual(target);
+        expect(interpolateCameraByTime(current, target, NaN)).toEqual(target);
     });
 });
 

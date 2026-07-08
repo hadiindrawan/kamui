@@ -6,9 +6,8 @@ export default function ExportPanel({
     isMuted, setIsMuted,
     loopPlayback, setLoopPlayback,
     isExporting, exportProgress,
-    exportQuality, setExportQuality,
+    exportResolution, setExportResolution,
     exportFormat, setExportFormat,
-    exportScale, setExportScale,
     conversionService, setConversionService,
     onExport,
 }) {
@@ -52,12 +51,13 @@ export default function ExportPanel({
                     <>
                         <select
                             className="quality-select"
-                            value={exportQuality}
-                            onChange={(e) => setExportQuality(e.target.value)}
-                            title="Export quality"
+                            value={exportResolution}
+                            onChange={(e) => setExportResolution(e.target.value)}
+                            title="Export resolution"
                         >
-                            <option value="best-performance">Best Performance & Speed</option>
-                            <option value="best-quality">Best Quality (High Bitrate)</option>
+                            <option value="2160">4K (2160p)</option>
+                            <option value="1080">1080p (Full HD)</option>
+                            <option value="720">720p (HD)</option>
                         </select>
                         <select
                             className="quality-select"
@@ -68,15 +68,6 @@ export default function ExportPanel({
                             <option value="mp4">MP4</option>
                             <option value="webm">WebM</option>
                         </select>
-                        <select
-                            className="quality-select"
-                            value={exportScale}
-                            onChange={(e) => setExportScale(parseInt(e.target.value))}
-                            title="Resolution scale"
-                        >
-                            <option value="1">1x (Original)</option>
-                            <option value="2">2x (Double)</option>
-                        </select>
                         {exportFormat === 'mp4' && (
                             <select
                                 className="quality-select"
@@ -85,7 +76,7 @@ export default function ExportPanel({
                                 title="Conversion service"
                             >
                                 <option value="local">Local (Browser)</option>
-                                <option value="cloud">Cloud (Backend)</option>
+                                <option value="cloud" disabled>Cloud (Coming soon)</option>
                             </select>
                         )}
                         <button className="btn-export" onClick={onExport}>

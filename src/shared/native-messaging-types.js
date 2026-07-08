@@ -28,6 +28,8 @@
 /** @typedef {{ type: 'ERROR', code: string, message: string }} ErrorMsg */
 /** @typedef {{ type: 'REQUEST_SET_QUALITY', quality: string }} RequestSetQualityMsg */
 /** @typedef {{ type: 'REQUEST_OPEN_RECORDINGS' }} RequestOpenRecordingsMsg */
+/** @typedef {{ type: 'REQUEST_START_RECORDING' }} RequestStartRecordingMsg */
+/** @typedef {{ type: 'REQUEST_STOP_RECORDING' }} RequestStopRecordingMsg */
 
 /* ─── Constants ─── */
 
@@ -48,4 +50,6 @@ export const MESSAGE_TYPES = {
     ERROR: 'ERROR',
     REQUEST_SET_QUALITY: 'REQUEST_SET_QUALITY',
     REQUEST_OPEN_RECORDINGS: 'REQUEST_OPEN_RECORDINGS',
+    REQUEST_START_RECORDING: 'REQUEST_START_RECORDING',
+    REQUEST_STOP_RECORDING: 'REQUEST_STOP_RECORDING',
 };

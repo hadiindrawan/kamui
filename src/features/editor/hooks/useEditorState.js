@@ -1,9 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { computeSceneLayout, mapSceneRectToContainer, computeCoverVideoRect } from '../utils/coordinates.js';
 import { generateAutoZoomSegments, resolveIntensity } from '../utils/auto-zoom.js';
+import { useToast } from '../../../shared/hooks/useToast.js';
 
 export const INTERACTION_TYPES = new Set(['click', 'dblclick', 'typing', 'selection']);
 const MIN_SEGMENT_DISTANCE_MS = 1000;
+
+// Resolution presets: `resolution` is the target pixel count on the frame's
+// short edge (see calculateCanvasSize in utils/export.js for why). Bitrates
+// are tuned for 60fps output.
+export const RESOLUTION_PRESETS = {
+    '2160': { resolution: 2160, bitrate: 45_000_000, label: '4K (2160p)' },
+    '1080': { resolution: 1080, bitrate: 16_000_000, label: '1080p (Full HD)' },
+    '720': { resolution: 720, bitrate: 8_000_000, label: '720p (HD)' },
+};
+const EXPORT_FPS = 60;
 
 export function segmentFromEvent(event, index, { zoomLevel, zoomDuration, positionMode = 'follow', type = 'zoom' }) {
     return {
@@ -102,10 +113,10 @@ export function useEditorState() {
     const [duration, setDuration] = useState(0);
     const [isExporting, setIsExporting] = useState(false);
     const [exportProgress, setExportProgress] = useState(0);
-    const [exportQuality, setExportQuality] = useState('best-quality');
-    const [exportScale, setExportScale] = useState(1);
+    const [exportResolution, setExportResolution] = useState('1080');
     const [exportFormat, setExportFormat] = useState('mp4');
     const [conversionService, setConversionService] = useState('local');
+    const { showToast } = useToast();
 
     const [zoomLevel, setZoomLevel] = useState(2);
     const [zoomDuration, setZoomDuration] = useState(800);
@@ -199,10 +210,6 @@ export function useEditorState() {
                 setHistory([JSON.stringify(segmentsWithZoom)]);
                 setHistoryIndex(0);
                 hasInitializedSegments.current = true;
-            }
-
-            if (rec.quality) {
-                setExportQuality(rec.quality);
             }
 
             if (rec.editorSettings) {
@@ -519,34 +526,31 @@ export function useEditorState() {
         setExportProgress(0);
         try {
             const { exportVideoMP4 } = await import('../utils/export.js');
-            const qualitySettings = {
-                'best-quality': { bitrate: 12000000, fps: 30, preset: 'medium' },
-                'best-performance': { bitrate: 2500000, fps: 30, preset: 'ultrafast' },
-            };
-            const quality = qualitySettings[exportQuality] || qualitySettings['best-quality'];
+            const preset = RESOLUTION_PRESETS[exportResolution] || RESOLUTION_PRESETS['1080'];
 
             await exportVideoMP4(
                 recording,
                 {
                     zoomLevel, zoomDuration, transitionDuration, segments, trimStart, trimEnd,
-                    playbackSpeed, isMuted, exportQuality, exportScale, format: exportFormat,
+                    playbackSpeed, isMuted, targetResolution: preset.resolution, bitrate: preset.bitrate,
+                    fps: EXPORT_FPS, format: exportFormat,
                     conversionService, aspectRatio, backgroundColor, backgroundMode, backgroundValue,
                     backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showShadow, showBorder,
                     borderRadius, showFollowCursor,
-                    ...quality,
                 },
                 (progress) => setExportProgress(progress)
             );
+            showToast({ type: 'success', message: 'Video exported' });
         } catch (err) {
             console.error('Export error:', err);
-            alert('Export failed: ' + err.message);
+            showToast({ type: 'error', message: 'Export failed: ' + err.message });
         } finally {
             setIsExporting(false);
         }
     }, [recording, zoomLevel, zoomDuration, transitionDuration, segments, trimStart, trimEnd, playbackSpeed,
-        isMuted, exportQuality, exportScale, exportFormat, conversionService, aspectRatio, backgroundColor,
+        isMuted, exportResolution, exportFormat, conversionService, aspectRatio, backgroundColor,
         backgroundMode, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
-        showShadow, showBorder, borderRadius, showFollowCursor]);
+        showShadow, showBorder, borderRadius, showFollowCursor, showToast]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -747,7 +751,7 @@ export function useEditorState() {
         // pending edits
         hasPendingEdits, setHasPendingEdits, savedSegments, handleSaveChanges,
         // export
-        isExporting, exportProgress, exportQuality, setExportQuality, exportScale, setExportScale,
+        isExporting, exportProgress, exportResolution, setExportResolution,
         exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
         // upload
         handleFileUpload,
