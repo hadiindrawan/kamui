@@ -44,7 +44,7 @@ function EditorContent() {
         resetTimeline, handleUndo, handleRedo, saveHistory, handleTrimChange,
         tracks, addTrack, removeTrack,
         hasPendingEdits, setHasPendingEdits, handleSaveChanges,
-        isExporting, exportProgress, exportResolution, setExportResolution,
+        isExporting, exportProgress, exportResolution, setExportResolution, exportFps, setExportFps,
         exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
         handleFileUpload,
         getVideoRect, getFrameRect, getVisibleVideoRect, getSceneLayout,
@@ -275,6 +275,8 @@ function EditorContent() {
                 exportProgress={exportProgress}
                 exportResolution={exportResolution}
                 setExportResolution={setExportResolution}
+                exportFps={exportFps}
+                setExportFps={setExportFps}
                 exportFormat={exportFormat}
                 setExportFormat={setExportFormat}
                 conversionService={conversionService}

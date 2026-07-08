@@ -14,7 +14,7 @@ export const RESOLUTION_PRESETS = {
     '1080': { resolution: 1080, bitrate: 16_000_000, label: '1080p (Full HD)' },
     '720': { resolution: 720, bitrate: 8_000_000, label: '720p (HD)' },
 };
-const EXPORT_FPS = 60;
+const DEFAULT_EXPORT_FPS = 60;
 
 export function segmentFromEvent(event, index, { zoomLevel, zoomDuration, positionMode = 'follow', type = 'zoom' }) {
     return {
@@ -114,6 +114,7 @@ export function useEditorState() {
     const [isExporting, setIsExporting] = useState(false);
     const [exportProgress, setExportProgress] = useState(0);
     const [exportResolution, setExportResolution] = useState('1080');
+    const [exportFps, setExportFps] = useState(DEFAULT_EXPORT_FPS);
     const [exportFormat, setExportFormat] = useState('mp4');
     const [conversionService, setConversionService] = useState('local');
     const { showToast } = useToast();
@@ -533,7 +534,7 @@ export function useEditorState() {
                 {
                     zoomLevel, zoomDuration, transitionDuration, segments, trimStart, trimEnd,
                     playbackSpeed, isMuted, targetResolution: preset.resolution, bitrate: preset.bitrate,
-                    fps: EXPORT_FPS, format: exportFormat,
+                    fps: exportFps, format: exportFormat,
                     conversionService, aspectRatio, backgroundColor, backgroundMode, backgroundValue,
                     backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showShadow, showBorder,
                     borderRadius, showFollowCursor,
@@ -548,7 +549,7 @@ export function useEditorState() {
             setIsExporting(false);
         }
     }, [recording, zoomLevel, zoomDuration, transitionDuration, segments, trimStart, trimEnd, playbackSpeed,
-        isMuted, exportResolution, exportFormat, conversionService, aspectRatio, backgroundColor,
+        isMuted, exportResolution, exportFps, exportFormat, conversionService, aspectRatio, backgroundColor,
         backgroundMode, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
         showShadow, showBorder, borderRadius, showFollowCursor, showToast]);
 
@@ -751,7 +752,7 @@ export function useEditorState() {
         // pending edits
         hasPendingEdits, setHasPendingEdits, savedSegments, handleSaveChanges,
         // export
-        isExporting, exportProgress, exportResolution, setExportResolution,
+        isExporting, exportProgress, exportResolution, setExportResolution, exportFps, setExportFps,
         exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
         // upload
         handleFileUpload,

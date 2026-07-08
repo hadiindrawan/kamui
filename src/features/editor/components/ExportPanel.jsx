@@ -1,16 +1,24 @@
 import React from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Download, Repeat } from 'lucide-react';
 
+// Explicit stops (not a raw min/step range) so every value, including the
+// endpoints, is exactly reachable regardless of interaction method - a plain
+// `min=30 step=20` range steps from `min`, which never lands exactly on 120.
+const FPS_STOPS = [30, 60, 90, 120];
+
 export default function ExportPanel({
     isPlaying, onPlayPause, onSkip,
     isMuted, setIsMuted,
     loopPlayback, setLoopPlayback,
     isExporting, exportProgress,
     exportResolution, setExportResolution,
+    exportFps, setExportFps,
     exportFormat, setExportFormat,
     conversionService, setConversionService,
     onExport,
 }) {
+    const fpsIndex = FPS_STOPS.includes(exportFps) ? FPS_STOPS.indexOf(exportFps) : FPS_STOPS.indexOf(60);
+
     return (
         <footer className="editor-controls">
             <div className="playback-controls">
@@ -59,6 +67,20 @@ export default function ExportPanel({
                             <option value="1080">1080p (Full HD)</option>
                             <option value="720">720p (HD)</option>
                         </select>
+                        <div className="fps-slider-group" title="Export frame rate">
+                            <span className="fps-slider-label">
+                                {exportFps}fps{exportFps >= 120 ? ' (slower)' : ''}
+                            </span>
+                            <input
+                                type="range"
+                                className="fps-slider"
+                                min="0"
+                                max={FPS_STOPS.length - 1}
+                                step="1"
+                                value={fpsIndex}
+                                onChange={(e) => setExportFps(FPS_STOPS[parseInt(e.target.value, 10)])}
+                            />
+                        </div>
                         <select
                             className="quality-select"
                             value={exportFormat}

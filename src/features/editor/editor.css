@@ -973,6 +973,37 @@ body {
     border-color: var(--color-accent);
 }
 
+.fps-slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fps-slider-label {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    min-width: 80px;
+}
+
+.fps-slider {
+    width: 90px;
+    height: 4px;
+    -webkit-appearance: none;
+    background: var(--color-bg-card);
+    border-radius: 2px;
+    outline: none;
+}
+
+.fps-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--color-accent);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
 .btn-export {
     display: flex;
     align-items: center;
