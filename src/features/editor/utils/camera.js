@@ -1,6 +1,8 @@
 // Virtual camera system for smooth zoom effects
 // Inspired by Cursorful.com architecture
 
+import { easeInOutQuart, easeOutCubic, easeInOutCubic } from './easing.js';
+
 // Helper: Convert normalized coordinates (0-1) back to absolute pixels
 function denormalizeCoordinates(event, videoWidth, videoHeight) {
     // Check if using new normalized format
@@ -61,8 +63,10 @@ function resolveEventRect(event, currentTimeMs, videoWidth, videoHeight, zoomLev
 // Interpolates camera fields between a `from` rect (the resting/unzoomed
 // state) and a `to` rect (the fully-zoomed target) through zoom-in/hold/out.
 function applyPhase(phase, progress, from, to) {
-    const t = easeInOutQuart(progress);
     if (phase === 'zoom-in') {
+        // Symmetric ease-in-out for the punch-in: accelerate off the rest
+        // state, decelerate into the held zoom.
+        const t = easeInOutQuart(progress);
         return {
             srcX: lerp(from.x, to.x, t), srcY: lerp(from.y, to.y, t),
             srcW: lerp(from.w, to.w, t), srcH: lerp(from.h, to.h, t),
@@ -70,6 +74,10 @@ function applyPhase(phase, progress, from, to) {
         };
     }
     if (phase === 'zoom-out') {
+        // Softer release: ease-out pulls away from the held zoom immediately
+        // and settles gently, which reads as more natural than the symmetric
+        // curve snapping back at the end.
+        const t = easeOutCubic(progress);
         return {
             srcX: lerp(to.x, from.x, t), srcY: lerp(to.y, from.y, t),
             srcW: lerp(to.w, from.w, t), srcH: lerp(to.h, from.h, t),
@@ -77,6 +85,37 @@ function applyPhase(phase, progress, from, to) {
         };
     }
     return { srcX: to.x, srcY: to.y, srcW: to.w, srcH: to.h, zoom: to.zoom };
+}
+
+/**
+ * Resolves a (possibly crossfading) zoom match into a camera rect. A plain
+ * match resolves through the normal zoom-in/hold/out phase easing. A
+ * `crossfade` match (see findZoomTarget) blends the outgoing segment's tail
+ * directly into the incoming segment's head across the span where their
+ * windows overlap, instead of hard-cutting between them - that hard cut is
+ * what caused two closely-spaced segments (gap smaller than roughly
+ * 2x transitionDuration) to visibly jump: the camera was still mid-way
+ * through zooming out from A when ownership flipped to B's zoom-in, computed
+ * from "rest" rather than from A's actual current position.
+ */
+function resolveZoomCamera(match, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds, restRect) {
+    if (match.crossfade) {
+        const { outgoing, incoming } = match.crossfade;
+        const a = resolveZoomCamera(outgoing, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds, restRect);
+        const b = resolveZoomCamera(incoming, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds, restRect);
+        const span = outgoing.windowEnd - incoming.windowStart;
+        const raw = span > 0 ? (currentTimeMs - incoming.windowStart) / span : 1;
+        const t = easeInOutCubic(Math.max(0, Math.min(1, raw)));
+        return {
+            srcX: lerp(a.srcX, b.srcX, t), srcY: lerp(a.srcY, b.srcY, t),
+            srcW: lerp(a.srcW, b.srcW, t), srcH: lerp(a.srcH, b.srcH, t),
+            zoom: lerp(a.zoom, b.zoom, t),
+        };
+    }
+    const { event, phase, progress } = match;
+    const rect = resolveEventRect(event, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds);
+    const targetRect = { x: rect.clampedX, y: rect.clampedY, w: rect.targetW, h: rect.targetH, zoom: rect.eventZoomLevel };
+    return applyPhase(phase, progress, restRect, targetRect);
 }
 
 export function calculateCameraPosition(currentTimeMs, events, dimensions) {
@@ -118,12 +157,9 @@ export function calculateCameraPosition(currentTimeMs, events, dimensions) {
     }
 
     if (zoomTarget) {
-        const { event, phase, progress } = zoomTarget;
         const bounds = cropRect ? { x: cropRect.x, y: cropRect.y, w: cropRect.w, h: cropRect.h } : null;
-        const rect = resolveEventRect(event, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds);
-        const targetRect = { x: rect.clampedX, y: rect.clampedY, w: rect.targetW, h: rect.targetH, zoom: rect.eventZoomLevel };
         const restRect = cropRect || fullRect;
-        Object.assign(camera, applyPhase(phase, progress, restRect, targetRect));
+        Object.assign(camera, resolveZoomCamera(zoomTarget, currentTimeMs, videoWidth, videoHeight, zoomLevel, bounds, restRect));
     } else if (cropRect) {
         camera.srcX = cropRect.x;
         camera.srcY = cropRect.y;
@@ -183,15 +219,36 @@ export function interpolateCameraByTime(current, target, dtMs, tau = 70) {
     return interpolateCamera(current, target, factor);
 }
 
-// Find focus moments: major clicks, typing, selections, focus (skip minor clicks).
-// Crop-type events are resolved separately by findCropTarget so the two can
-// stack independently.
+// Find focus moments: major clicks, typing, selections, focus (skip minor
+// clicks). Crop-type events are resolved separately by findCropTarget so the
+// two can stack independently.
+//
+// Different tracks still use "topmost wins" outright (a manually stacked
+// segment overrides an auto one, no blending). But two segments on the *same*
+// track whose transition windows overlap - which happens whenever the gap
+// between them is smaller than roughly 2x transitionDuration - are chained
+// into a single `{ crossfade }` match instead of the hard-cut that
+// `findBestMatch`'s array-order tiebreak used to produce (see
+// resolveZoomCamera for why that was a visible jump).
 function findZoomTarget(currentTimeMs, events, settings) {
     const zoomTypeEvents = events.filter(e =>
         e.type === 'click' || e.type === 'dblclick' || e.type === 'zoom' ||
         e.type === 'typing' || e.type === 'selection' || e.type === 'focus'
     );
-    return findBestMatch(currentTimeMs, zoomTypeEvents, settings);
+    const matches = findActiveMatches(currentTimeMs, zoomTypeEvents, settings);
+    if (matches.length === 0) return null;
+
+    const maxTrackId = matches.reduce((max, m) => Math.max(max, m.event.trackId ?? 0), -Infinity);
+    const topMatches = matches.filter((m) => (m.event.trackId ?? 0) === maxTrackId);
+    if (topMatches.length === 1) return topMatches[0];
+
+    // Blend the two most recent (nearest to currentTimeMs) overlapping
+    // matches; with >2 simultaneously active (rare/dense clicks) the earlier
+    // ones are moot since we're already past their own window's start.
+    topMatches.sort((a, b) => a.event.time - b.event.time);
+    const incoming = topMatches[topMatches.length - 1];
+    const outgoing = topMatches[topMatches.length - 2];
+    return { crossfade: { outgoing, incoming } };
 }
 
 function findCropTarget(currentTimeMs, events, settings) {
@@ -214,6 +271,18 @@ function findBestMatch(currentTimeMs, focusEvents, settings) {
     return best;
 }
 
+// Every event whose window covers currentTimeMs, not just the top-priority
+// one - lets findZoomTarget detect and crossfade overlapping same-track
+// segments instead of hard-cutting between them.
+function findActiveMatches(currentTimeMs, focusEvents, settings) {
+    const matches = [];
+    for (const event of focusEvents) {
+        const match = computeWindowMatch(currentTimeMs, event, settings);
+        if (match) matches.push(match);
+    }
+    return matches;
+}
+
 function computeWindowMatch(currentTimeMs, event, settings) {
     const { zoomDuration, transitionDuration } = settings;
     const preZoomDuration = transitionDuration;
@@ -226,16 +295,21 @@ function computeWindowMatch(currentTimeMs, event, settings) {
     const zoomOutEndTime = zoomHoldEndTime + transitionDuration;
 
     if (currentTimeMs >= zoomStartTime && currentTimeMs < zoomOutEndTime) {
+        // windowStart/windowEnd (this match's full [zoom-in start, zoom-out
+        // end] span) let resolveZoomCamera compute a crossfade blend factor
+        // between two overlapping matches without recomputing their timing.
+        const windowStart = zoomStartTime;
+        const windowEnd = zoomOutEndTime;
         if (currentTimeMs < zoomInEndTime) {
             const elapsed = currentTimeMs - zoomStartTime;
             const progress = Math.max(0, Math.min(1, elapsed / preZoomDuration));
-            return { event, phase: 'zoom-in', progress };
+            return { event, phase: 'zoom-in', progress, windowStart, windowEnd };
         } else if (currentTimeMs < zoomHoldEndTime) {
-            return { event, phase: 'zoom-hold', progress: 1 };
+            return { event, phase: 'zoom-hold', progress: 1, windowStart, windowEnd };
         } else {
             const elapsed = currentTimeMs - zoomHoldEndTime;
             const progress = Math.max(0, Math.min(1, elapsed / transitionDuration));
-            return { event, phase: 'zoom-out', progress };
+            return { event, phase: 'zoom-out', progress, windowStart, windowEnd };
         }
     }
 
@@ -321,16 +395,4 @@ function catmullRomSegment(p0, p1, p2, p3, t) {
 
 function lerp(start, end, t) {
     return start + (end - start) * t;
-}
-
-// Smoother easing function for more natural camera movement
-function easeInOutQuart(t) {
-    return t < 0.5
-        ? 8 * t * t * t * t
-        : 1 - Math.pow(-2 * t + 2, 4) / 2;
-}
-
-// Alternative easing for quick response
-function easeOutCubic(t) {
-    return 1 - Math.pow(1 - t, 3);
 }

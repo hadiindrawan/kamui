@@ -6,6 +6,8 @@
  * rendered frame — this used to be hand-duplicated in both places.
  */
 
+import { easeInOutCubic } from './easing.js';
+
 const ASPECT_RATIOS = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '4:5': 4 / 5 };
 
 /**
@@ -190,10 +192,6 @@ export function getZoomRegionFrameSize(layout, zoomLevel) {
         w: (layout.width / z) / layout.vW,
         h: (layout.height / z) / layout.vH,
     };
-}
-
-function easeInOutCubic(t) {
-    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
 /**

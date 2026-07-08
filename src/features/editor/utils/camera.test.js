@@ -122,6 +122,65 @@ describe('calculateCameraPosition', () => {
     });
 });
 
+describe('calculateCameraPosition - overlapping same-track segments (crossfade)', () => {
+    // A's zoom-out ramp is [1800, 2100); B's zoom-in ramp is [1700, 2000) -
+    // they overlap for 300ms. Before the crossfade fix, findBestMatch's
+    // array-order tiebreak meant the instant B's window opened (t=1700), the
+    // camera would snap straight from A's held zoom (zoom 2, tight corner) to
+    // B's own zoom-in-from-rest starting value (zoom 1, full frame) - a hard,
+    // visible teleport whenever two segments sit closer together than
+    // ~2x transitionDuration. This is the exact bug reported: two segments
+    // under a ~1s gap apart made the zoom visibly jump.
+    const events = [
+        { type: 'click', time: 1000, x: 0.2, y: 0.2 }, // A: window [700, 2100)
+        { type: 'click', time: 2000, x: 0.8, y: 0.8 }, // B: window [1700, 3100)
+    ];
+
+    it('does not snap toward rest the instant the next segment\'s window opens', () => {
+        const justBefore = calculateCameraPosition(1699, events, dimensions);
+        const justAfter = calculateCameraPosition(1700, events, dimensions);
+        expect(justBefore.zoom).toBeCloseTo(2, 5);
+        // Old behavior would drop this to 1 (full rest) here; fixed behavior
+        // stays continuous with justBefore.
+        expect(justAfter.zoom).toBeGreaterThan(1.8);
+        expect(Math.abs(justAfter.zoom - justBefore.zoom)).toBeLessThan(0.1);
+    });
+
+    it('drifts gradually across the handoff instead of teleporting in one frame', () => {
+        let prev = null;
+        for (let t = 1650; t <= 2150; t += 10) {
+            const camera = calculateCameraPosition(t, events, dimensions);
+            if (prev) {
+                expect(Math.abs(camera.srcX - prev.srcX)).toBeLessThan(60);
+                expect(Math.abs(camera.srcY - prev.srcY)).toBeLessThan(60);
+                expect(Math.abs(camera.zoom - prev.zoom)).toBeLessThan(0.3);
+            }
+            prev = camera;
+        }
+    });
+
+    it('still settles on each segment\'s own held target outside the overlap', () => {
+        const duringA = calculateCameraPosition(1500, events, dimensions); // A's hold, before overlap
+        const duringB = calculateCameraPosition(2400, events, dimensions); // B's hold, after overlap
+        expect(duringA.srcX).toBeCloseTo(0);
+        expect(duringA.srcY).toBeCloseTo(0);
+        expect(duringB.srcX).toBeCloseTo(500);
+        expect(duringB.srcY).toBeCloseTo(500);
+    });
+
+    it('still hard-switches (no crossfade) when the overlapping segments are on different tracks', () => {
+        const stacked = [
+            { type: 'click', time: 1000, x: 0.2, y: 0.2, trackId: 0 },
+            { type: 'click', time: 2000, x: 0.8, y: 0.8, trackId: 1 },
+        ];
+        const bOnly = [stacked[1]];
+        const t = 1900; // both windows active here; trackId 1 must win outright, unblended.
+        // A's presence should have zero effect on the result - the higher
+        // track wins outright rather than crossfading with the lower one.
+        expect(calculateCameraPosition(t, stacked, dimensions)).toEqual(calculateCameraPosition(t, bOnly, dimensions));
+    });
+});
+
 describe('interpolateCamera', () => {
     it('returns the target directly when there is no current camera', () => {
         const target = { srcX: 10, srcY: 20, srcW: 100, srcH: 100, zoom: 2 };

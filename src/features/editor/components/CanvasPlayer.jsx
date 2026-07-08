@@ -1,10 +1,8 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
 import { calculateCameraPosition, interpolateCameraByTime } from '../utils/camera.js';
-import { interpolateSceneLayout } from '../utils/coordinates.js';
+import { computeSceneLayout, interpolateSceneLayout } from '../utils/coordinates.js';
 import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from '../utils/scene-renderer.js';
-
-// Duration of the eased tween when the framing/aspect ratio changes mid-play.
-const FRAMING_TRANSITION_MS = 300;
+import { createFramingAnimator, TRANSITION_CONFIG } from '../utils/framing-transition.js';
 
 const CanvasPlayer = forwardRef(({
     recording,
@@ -50,9 +48,13 @@ const CanvasPlayer = forwardRef(({
     const backgroundImageRef = useRef(null);
     const backgroundBufferRef = useRef(null); // Cache blurred/rendered background
     const renderFrameRef = useRef(null); // Stable handle so the rAF loop never closes over stale state
-    const layoutAnimRef = useRef(null); // { from, to, startTs } for framing transitions
+    const layoutAnimRef = useRef(null); // { fromLayout, startTs, durationMs } for structural (aspect/fit) crossfades
     const lastLayoutRef = useRef(null); // Last layout actually drawn, to seed transitions
-    const lastTargetLayoutRef = useRef(null); // Last target layout, to detect framing changes
+    // Numeric framing animator (crop zoom/pan, padding, global zoom level). Seeded
+    // lazily below once props are available so nothing animates on first paint.
+    const animatorRef = useRef(null);
+    const structuralRef = useRef(null); // Last discrete structural inputs, to detect aspect/fit/background changes
+    const ensureRenderLoopRef = useRef(null); // Stable handle to (re)start the rAF loop from effects
     const [isHoveringVideo, setIsHoveringVideo] = useState(false);
     const [isDraggingProgress, setIsDraggingProgress] = useState(false);
     const [hoverTime, setHoverTime] = useState(null);
@@ -147,28 +149,46 @@ const CanvasPlayer = forwardRef(({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [recording, segments, aspectRatio, backgroundMode, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showFollowCursor, zoomLevel, zoomDuration, transitionDuration, metadataReady]);
 
-    // When the framing (aspect ratio / crop / padding) changes during
-    // playback, start an eased transition from the last-drawn layout to the new
-    // target instead of snapping. Snap when paused.
+    // Lazily seed the numeric framing animator with the current committed
+    // values so the first paint matches the props and nothing animates until
+    // the user actually changes a setting.
+    if (!animatorRef.current) {
+        animatorRef.current = createFramingAnimator({ cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding });
+        structuralRef.current = { aspectRatio, cropToFill, backgroundMode };
+    }
+
+    // Numeric framing changes (crop zoom/pan, padding, global zoom level) ease
+    // on their own per-field timelines whether paused or playing. Until the
+    // video's metadata is ready (settings still loading from IndexedDB) we snap
+    // instead, so opening a recording doesn't play an intro animation.
     useEffect(() => {
-        if (!sceneModel) return;
-        const target = sceneModel.layout;
-        const prev = lastTargetLayoutRef.current;
-        const geomChanged = prev && (
-            prev.width !== target.width || prev.height !== target.height ||
-            prev.vX !== target.vX || prev.vY !== target.vY ||
-            prev.vW !== target.vW || prev.vH !== target.vH ||
-            prev.sx !== target.sx || prev.sy !== target.sy ||
-            prev.sW !== target.sW || prev.sH !== target.sH
-        );
-        if (geomChanged && isPlaying) {
-            layoutAnimRef.current = { from: lastLayoutRef.current || prev, to: target, startTs: performance.now() };
-        } else {
-            layoutAnimRef.current = null;
+        const animator = animatorRef.current;
+        if (!metadataReady) {
+            animatorRef.current = createFramingAnimator({ cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding });
+            return;
         }
-        lastTargetLayoutRef.current = target;
+        animator.setTarget({ cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding }, performance.now());
+        ensureRenderLoopRef.current?.();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sceneModel]);
+    }, [cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding, metadataReady]);
+
+    // Structural changes alter the scene's pixel geometry discretely (canvas
+    // dimensions on an aspect switch, contain<->cover on a crop-to-fill toggle,
+    // the padded inset box appearing/disappearing with the background mode) and
+    // can't be lerped as a value, so we crossfade whole layouts. Seeded from the
+    // last drawn layout so a change mid-tween (numeric or structural) continues
+    // seamlessly. interpolateSceneLayout applies easeInOutCubic internally,
+    // which matches TRANSITION_CONFIG.aspect.easing — we only take its duration.
+    useEffect(() => {
+        const prev = structuralRef.current;
+        structuralRef.current = { aspectRatio, cropToFill, backgroundMode };
+        if (!metadataReady || !prev) return;
+        const changed = prev.aspectRatio !== aspectRatio || prev.cropToFill !== cropToFill || prev.backgroundMode !== backgroundMode;
+        if (!changed) return;
+        layoutAnimRef.current = { fromLayout: lastLayoutRef.current, startTs: performance.now(), durationMs: TRANSITION_CONFIG.aspect.durationMs };
+        ensureRenderLoopRef.current?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [aspectRatio, cropToFill, backgroundMode, metadataReady]);
 
     const refreshBackground = () => {
         if (!sceneModel) return;
@@ -216,12 +236,11 @@ const CanvasPlayer = forwardRef(({
                         if (isPlaying) video.play().catch(e => console.warn('Play error:', e));
                     }, { once: true });
                 }
-                renderLoop();
+                ensureRenderLoop();
             } else {
                 videoRefs.current.forEach(v => { if (v && !v.paused) v.pause(); });
-                if (rafRef.current) {
-                    cancelAnimationFrame(rafRef.current);
-                }
+                // Don't hard-cancel: a framing transition may still be settling.
+                // The loop stops itself once nothing needs animating.
             }
         }
     }, [isPlaying]);
@@ -339,16 +358,33 @@ const CanvasPlayer = forwardRef(({
         });
     }
 
-    function renderLoop() {
+    // The loop runs while the video is playing OR a framing transition (numeric
+    // tween or structural crossfade) is still settling — the latter is what lets
+    // crop/zoom/aspect changes ease while paused.
+    function shouldKeepAnimating() {
         const video = videoRefs.current[activeVideoIndex];
-        if (video && !video.paused) {
-            // Call through a ref so the scheduled callback always uses the
-            // latest props/state (framing, segments...) instead of the closure
-            // captured when playback started.
-            if (renderFrameRef.current) renderFrameRef.current();
+        const playing = video && !video.paused;
+        return playing || animatorRef.current?.isActive() || !!layoutAnimRef.current;
+    }
+
+    function renderLoop() {
+        // Call through a ref so the scheduled callback always uses the latest
+        // props/state (framing, segments...) instead of the closure captured
+        // when the loop started.
+        if (renderFrameRef.current) renderFrameRef.current();
+        if (shouldKeepAnimating()) {
+            rafRef.current = requestAnimationFrame(renderLoop);
+        } else {
+            rafRef.current = null;
+        }
+    }
+
+    function ensureRenderLoop() {
+        if (rafRef.current == null) {
             rafRef.current = requestAnimationFrame(renderLoop);
         }
     }
+    ensureRenderLoopRef.current = ensureRenderLoop;
 
     function renderFrame() {
         const canvas = canvasRef.current;
@@ -373,16 +409,41 @@ const CanvasPlayer = forwardRef(({
             onFrameTime(globalTime);
         }
 
-        // Ease between framings when the aspect ratio changes mid-playback.
-        let layout = model.layout;
-        const anim = layoutAnimRef.current;
-        if (anim && isPlaying) {
-            const t = (performance.now() - anim.startTs) / FRAMING_TRANSITION_MS;
+        const nowAnim = performance.now();
+
+        // Layout is rebuilt from the *animated* numeric framing values so crop
+        // zoom/pan and padding ease every frame (paused or playing). The
+        // discrete inputs (aspect/fit/background) come straight from props.
+        const anim = animatorRef.current.sample(nowAnim).settings;
+        const targetLayout = {
+            ...computeSceneLayout({
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+                aspectRatio,
+                backgroundMode,
+                insetPadding: anim.insetPadding,
+                cropToFill,
+                cropPanX: anim.cropPanX,
+                cropPanY: anim.cropPanY,
+                cropZoom: anim.cropZoom,
+            }),
+            videoW: video.videoWidth,
+            videoH: video.videoHeight,
+        };
+
+        // Crossfade whole layouts for a structural (aspect/fit/background)
+        // change. interpolateSceneLayout eases the raw progress itself.
+        let layout = targetLayout;
+        const structural = layoutAnimRef.current;
+        if (structural && structural.fromLayout) {
+            const t = (nowAnim - structural.startTs) / structural.durationMs;
             if (t >= 1) {
                 layoutAnimRef.current = null;
             } else {
-                layout = interpolateSceneLayout(anim.from, anim.to, t);
+                layout = interpolateSceneLayout(structural.fromLayout, targetLayout, t);
             }
+        } else if (structural) {
+            layoutAnimRef.current = null; // no seed layout captured yet; snap
         }
         lastLayoutRef.current = layout;
 
@@ -391,11 +452,16 @@ const CanvasPlayer = forwardRef(({
             canvas.height = layout.height;
         }
 
-        // During a transition the camera must be resolved in the interpolated
-        // scene so its zoom stays consistent with the drawn geometry.
-        const cameraConfig = layout === model.layout
-            ? model.cameraConfig
-            : { ...model.cameraConfig, videoWidth: layout.width, videoHeight: layout.height, canvasWidth: layout.width, canvasHeight: layout.height };
+        // Resolve the camera against the drawn geometry, and ease the global
+        // zoom level through the same animated value so the depth doesn't snap.
+        const cameraConfig = {
+            ...model.cameraConfig,
+            videoWidth: layout.width,
+            videoHeight: layout.height,
+            canvasWidth: layout.width,
+            canvasHeight: layout.height,
+            zoomLevel: anim.zoomLevel,
+        };
 
         const targetCamera = calculateCameraPosition(currentTimeMs, model.events, cameraConfig);
         const nowTs = performance.now();
