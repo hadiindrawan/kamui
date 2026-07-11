@@ -124,7 +124,7 @@ export function calculateCameraPosition(currentTimeMs, events, dimensions) {
         videoHeight,
         zoomLevel = 2,
         zoomDuration = 800,
-        transitionDuration = 300
+        transitionDuration = 600
     } = dimensions;
 
     // Default camera shows full video
@@ -168,28 +168,18 @@ export function calculateCameraPosition(currentTimeMs, events, dimensions) {
         camera.zoom = cropRect.zoom;
     }
 
-    // Follow-cursor mode: Smooth camera panning (suppressed whenever a zoom or
-    // crop segment already has camera control).
-    const followTarget = findFollowTarget(currentTimeMs, events);
-    if (followTarget && !zoomTarget && !cropRect) {
-        const pos = denormalizeCoordinates(followTarget, videoWidth, videoHeight);
-
-        // Calculate follow camera (wider view than zoom)
-        const followW = videoWidth / 1.5; // Less zoom for follow mode
-        const followH = videoHeight / 1.5;
-
-        const targetX = pos.x - (followW / 2);
-        const targetY = pos.y - (followH / 2);
-
-        const clampedX = Math.max(0, Math.min(targetX, videoWidth - followW));
-        const clampedY = Math.max(0, Math.min(targetY, videoHeight - followH));
-
-        // Smooth follow with easing
-        camera.srcX = lerp(camera.srcX, clampedX, 0.05);
-        camera.srcY = lerp(camera.srcY, clampedY, 0.05);
-        camera.srcW = lerp(camera.srcW, followW, 0.05);
-        camera.srcH = lerp(camera.srcH, followH, 0.05);
-        camera.zoom = lerp(camera.zoom, 1.5, 0.05);
+    // Follow-cursor mode: the scene model precomputes anchor segments (1.5x
+    // holds centered on clicks/typing, ending on a boundary exit) shaped like
+    // zoom events, so they resolve through the same window/phase/crossfade
+    // machinery as auto-zoom. Suppressed whenever a real zoom or crop segment
+    // already owns the camera. This keeps the camera a pure function of time —
+    // no frame-rate-dependent chase — so preview and export stay identical.
+    const followSegments = dimensions.followSegments;
+    if (!zoomTarget && !cropRect && followSegments && followSegments.length) {
+        const match = findZoomTarget(currentTimeMs, followSegments, settings);
+        if (match) {
+            Object.assign(camera, resolveZoomCamera(match, currentTimeMs, videoWidth, videoHeight, zoomLevel, null, fullRect));
+        }
     }
 
     return camera;
@@ -328,16 +318,6 @@ function keyframeAnchor(event, currentTimeMs) {
     return smoothCursorPosition(currentTimeMs, pts);
 }
 
-// Find a smoothed cursor position for follow mode. Raw cursor samples are
-// noisy (hand tremor, trackpad jitter, irregular sampling rate) — following
-// them directly makes the camera amplify every micro-movement into a shaky
-// pan. Smoothing the path with a spline before using it is what separates a
-// cinematic auto-zoom from a nauseating one.
-function findFollowTarget(currentTimeMs, events) {
-    const followEvents = events.filter(e => e.type === 'follow' || e.type === 'move');
-    return smoothCursorPosition(currentTimeMs, followEvents);
-}
-
 /**
  * Smooths a chronological cursor path using a centripetal Catmull-Rom
  * spline, evaluated at `currentTimeMs`. Centripetal parameterization (knot
@@ -348,12 +328,17 @@ export function smoothCursorPosition(currentTimeMs, pathEvents) {
     if (pathEvents.length === 0) return null;
     if (pathEvents.length === 1) return pathEvents[0];
 
-    // Index of the last sample at or before currentTimeMs.
-    let i = -1;
-    for (let k = 0; k < pathEvents.length; k++) {
-        if (pathEvents[k].time <= currentTimeMs) i = k;
-        else break;
+    // Index of the last sample at or before currentTimeMs (binary search — the
+    // path can hold tens of thousands of samples on long recordings, and this
+    // runs per frame for both the camera and the rendered dot).
+    let lo = 0;
+    let hi = pathEvents.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (pathEvents[mid].time <= currentTimeMs) lo = mid + 1;
+        else hi = mid;
     }
+    const i = lo - 1;
     if (i === -1) return pathEvents[0]; // before the first sample
     if (i === pathEvents.length - 1) return pathEvents[i]; // after the last sample
 

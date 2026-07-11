@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useRef, useState } from 'react';
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import './Toast.css';
 
 export const ToastContext = createContext(null);
@@ -26,7 +26,9 @@ export function ToastProvider({ children }) {
             <div className="toast-stack" role="status" aria-live="polite">
                 {toasts.map((toast) => (
                     <div key={toast.id} className={`toast toast-${toast.type}`}>
-                        {toast.type === 'error' ? <XCircle size={18} /> : <CheckCircle2 size={18} />}
+                        {toast.type === 'error' ? <XCircle size={18} />
+                            : toast.type === 'warning' ? <AlertTriangle size={18} />
+                                : <CheckCircle2 size={18} />}
                         <span>{toast.message}</span>
                     </div>
                 ))}

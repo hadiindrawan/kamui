@@ -17,6 +17,7 @@
 /** @typedef {{ type: 'START_TRACKING', session_id: string }} StartTrackingMsg */
 /** @typedef {{ type: 'STOP_TRACKING' }} StopTrackingMsg */
 /** @typedef {{ type: 'APP_STATE', is_recording: boolean, quality: string, mode: string }} AppStateMsg */
+/** @typedef {{ type: 'PRESET_LIST', presets: Array<{ id: string, name: string }> }} PresetListMsg */
 
 /* ─── Native App → Extension ─── */
 
@@ -30,6 +31,7 @@
 /** @typedef {{ type: 'REQUEST_OPEN_RECORDINGS' }} RequestOpenRecordingsMsg */
 /** @typedef {{ type: 'REQUEST_START_RECORDING' }} RequestStartRecordingMsg */
 /** @typedef {{ type: 'REQUEST_STOP_RECORDING' }} RequestStopRecordingMsg */
+/** @typedef {{ type: 'REQUEST_APPLY_PRESET', preset_id: string }} RequestApplyPresetMsg */
 
 /* ─── Constants ─── */
 
@@ -40,6 +42,7 @@ export const MESSAGE_TYPES = {
     START_TRACKING: 'START_TRACKING',
     STOP_TRACKING: 'STOP_TRACKING',
     APP_STATE: 'APP_STATE',
+    PRESET_LIST: 'PRESET_LIST',
 
     // Native → Extension
     PONG: 'PONG',
@@ -52,4 +55,5 @@ export const MESSAGE_TYPES = {
     REQUEST_OPEN_RECORDINGS: 'REQUEST_OPEN_RECORDINGS',
     REQUEST_START_RECORDING: 'REQUEST_START_RECORDING',
     REQUEST_STOP_RECORDING: 'REQUEST_STOP_RECORDING',
+    REQUEST_APPLY_PRESET: 'REQUEST_APPLY_PRESET',
 };

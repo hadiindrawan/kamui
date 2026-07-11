@@ -3,6 +3,8 @@ import { calculateCameraPosition, interpolateCameraByTime } from '../utils/camer
 import { computeSceneLayout, interpolateSceneLayout } from '../utils/coordinates.js';
 import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from '../utils/scene-renderer.js';
 import { createFramingAnimator, TRANSITION_CONFIG } from '../utils/framing-transition.js';
+import { playClickSound } from '../services/click-sound.js';
+import { DEFAULT_CURSOR_SMOOTHING } from '../utils/cursor-smoothing.js';
 
 const CanvasPlayer = forwardRef(({
     recording,
@@ -11,7 +13,7 @@ const CanvasPlayer = forwardRef(({
     segments = [],
     zoomLevel = 2,
     zoomDuration = 800,
-    transitionDuration = 300,
+    transitionDuration = 600,
     playbackSpeed = 1,
     aspectRatio = '16:9',
     backgroundColor = '#1a2e3b',
@@ -25,6 +27,7 @@ const CanvasPlayer = forwardRef(({
     showShadow = true,
     showBorder = false,
     showFollowCursor = false,
+    cursorSmoothing = DEFAULT_CURSOR_SMOOTHING,
     cropZoom = 1,
     onTimeUpdate,
     onPlaybackEnded,
@@ -33,7 +36,11 @@ const CanvasPlayer = forwardRef(({
     onVideoDimensions,
     onSeek,
     borderRadius = 12,
-    isMuted = false
+    isMuted = false,
+    volume = 1,
+    clickAnimationStyle = 'ripple',
+    clickAnimationOpacity = 'med',
+    clickSound = 'none'
 }, ref) => {
     const canvasRef = useRef(null);
     const videoRefs = useRef([]);
@@ -60,6 +67,7 @@ const CanvasPlayer = forwardRef(({
     const [hoverTime, setHoverTime] = useState(null);
     const [lastRefresh, setLastRefresh] = useState(0); // Trigger for settings-based re-renders
     const [metadataReady, setMetadataReady] = useState(false);
+    const lastSoundScanMsRef = useRef(null); // playhead ms of the previous frame's click-sound scan
 
     useImperativeHandle(ref, () => ({
         getCurrentTime: () => {
@@ -104,22 +112,34 @@ const CanvasPlayer = forwardRef(({
         }
     }));
 
-    // Sync muted state
+    // Sync muted state + volume
     useEffect(() => {
-        videoRefs.current.forEach(v => { if (v) v.muted = isMuted; });
-    }, [isMuted]);
+        videoRefs.current.forEach(v => { if (v) { v.muted = isMuted; v.volume = volume; } });
+    }, [isMuted, volume]);
 
     // Load background image when needed
     useEffect(() => {
         if (backgroundMode === 'image' && backgroundValue) {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => {
-                backgroundImageRef.current = img;
-                refreshBackground();
-                if (!isPlaying) renderFrame();
+            // A CORS-tagged request can fail when the same URL is already cached
+            // without CORS (e.g. by the FramingPanel's CSS `background:url(...)`
+            // preview), leaving the canvas background blank. Try with crossOrigin
+            // first; on error, retry once without it — the preview canvas is
+            // display-only so a tainted image is fine here (export preloads its
+            // own CORS image separately).
+            const loadImage = (useCors) => {
+                const img = new Image();
+                if (useCors) img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    backgroundImageRef.current = img;
+                    refreshBackground();
+                    if (!isPlaying) renderFrame();
+                };
+                img.onerror = () => {
+                    if (useCors) loadImage(false);
+                };
+                img.src = backgroundValue;
             };
-            img.src = backgroundValue;
+            loadImage(true);
         } else {
             backgroundImageRef.current = null;
             refreshBackground();
@@ -131,7 +151,7 @@ const CanvasPlayer = forwardRef(({
     const rendererSettings = {
         aspectRatio, backgroundMode, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
         backgroundColor, backgroundValue, backgroundBlur,
-        zoomLevel, zoomDuration, transitionDuration, showFollowCursor,
+        zoomLevel, zoomDuration, transitionDuration, showFollowCursor, cursorSmoothing,
     };
 
     // Pre-calculate the shared scene model (layout + mapped events + camera
@@ -147,7 +167,7 @@ const CanvasPlayer = forwardRef(({
             recordingEvents: recording?.events || [],
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [recording, segments, aspectRatio, backgroundMode, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showFollowCursor, zoomLevel, zoomDuration, transitionDuration, metadataReady]);
+    }, [recording, segments, aspectRatio, backgroundMode, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showFollowCursor, cursorSmoothing, zoomLevel, zoomDuration, transitionDuration, metadataReady]);
 
     // Lazily seed the numeric framing animator with the current committed
     // values so the first paint matches the props and nothing animates until
@@ -279,6 +299,7 @@ const CanvasPlayer = forwardRef(({
         aspectRatio, backgroundMode,
         backgroundValue, backgroundBlur,
         insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showShadow, showBorder, borderRadius, metadataReady,
+        clickAnimationStyle, clickAnimationOpacity,
         sceneModel
     ]);
 
@@ -400,6 +421,24 @@ const CanvasPlayer = forwardRef(({
         const timeToRender = isPlaying ? video.currentTime : currentTime;
         const currentTimeMs = (timeToRender || 0) * 1000;
 
+        // Click sounds: fire for every (deduped) click the playhead crossed
+        // since the last frame. A window cap keeps seeks/segment jumps from
+        // machine-gunning every click in between.
+        if (!isPlaying) {
+            lastSoundScanMsRef.current = null;
+        } else {
+            const prevMs = lastSoundScanMsRef.current;
+            lastSoundScanMsRef.current = currentTimeMs;
+            if (prevMs != null && currentTimeMs > prevMs && currentTimeMs - prevMs < 1000
+                && !isMuted && clickSound && clickSound !== 'none') {
+                for (const e of model.clickEvents || []) {
+                    if (e.time > prevMs && e.time <= currentTimeMs) {
+                        playClickSound(clickSound, { volume });
+                    }
+                }
+            }
+        }
+
         // Report a frame-accurate global time so the timeline playhead can move
         // smoothly at rAF cadence instead of the media element's coarse
         // (100-300ms) timeupdate events.
@@ -481,6 +520,8 @@ const CanvasPlayer = forwardRef(({
             borderRadius,
             backgroundMode,
             showCursorHighlight: true,
+            clickStyle: clickAnimationStyle,
+            clickOpacity: clickAnimationOpacity,
         });
     }
 

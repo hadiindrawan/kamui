@@ -1,4 +1,4 @@
-import { segmentFromEvent, dedupeInteractionEvents, formatTime, INTERACTION_TYPES, resolvePlaybackAction } from './useEditorState.js';
+import { segmentFromEvent, dedupeInteractionEvents, formatTime, INTERACTION_TYPES, resolvePlaybackAction, RESOLUTION_PRESETS } from './useEditorState.js';
 
 describe('INTERACTION_TYPES', () => {
     it('flags major interactions but not cursor movement or minor clicks', () => {
@@ -107,6 +107,17 @@ describe('resolvePlaybackAction', () => {
         const segments = [{ id: 'a', startTime: 1000, duration: 20000, loopMode: 'none' }];
         const result = resolvePlaybackAction(10, { segments, selectedSegmentId: 'a', trimStart: 0, trimEnd: 10, loopPlayback: false });
         expect(result).toEqual({ action: 'pause', time: 10 });
+    });
+});
+
+describe('RESOLUTION_PRESETS', () => {
+    it('carries only resolution + label — bitrate is now computed per codec/fps/tier at export time', () => {
+        for (const key of Object.keys(RESOLUTION_PRESETS)) {
+            const preset = RESOLUTION_PRESETS[key];
+            expect(preset).toHaveProperty('resolution');
+            expect(preset).toHaveProperty('label');
+            expect(preset).not.toHaveProperty('bitrate');
+        }
     });
 });
 

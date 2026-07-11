@@ -1,7 +1,14 @@
 // MP4/WebM video export using mediabunny, constant-frame-rate compositing
 import { calculateCameraPosition, interpolateCameraByTime } from './camera.js';
-import { getAspectRatioValue } from './coordinates.js';
+import { calculateCanvasSize } from './coordinates.js';
 import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from './scene-renderer.js';
+import { filterRapidClicks } from './click-animations.js';
+import { scheduleClickSound, CLICK_MASTER_GAIN } from '../services/click-sound.js';
+import {
+    selectExportCodec,
+    computeAudioBitrate,
+    SIZE_BUDGET_BYTES_PER_MIN,
+} from './export-codec.js';
 
 export async function exportVideoMP4(recording, settings, onProgress) {
     const { conversionService = 'local', format = 'mp4' } = settings;
@@ -15,11 +22,38 @@ export async function exportVideoMP4(recording, settings, onProgress) {
         backgroundImage = await preloadImage(settings.backgroundValue);
     }
 
-    const blob = await runLocalConversion({ recording, settings, backgroundImage, onProgress });
+    const { blob: convertedBlob, codec, warning: codecWarning, durationSec } =
+        await runLocalConversion({ recording, settings, backgroundImage, onProgress });
+    let blob = convertedBlob;
+
+    // Click sounds are composited into the exported audio track in a second,
+    // isolated pass that losslessly copies the video packets and rewrites only
+    // the audio (original audio + click blips). Kept out of the tuned Conversion
+    // pipeline so the video path is byte-for-byte unchanged; any failure falls
+    // back to the click-free video rather than failing the whole export.
+    try {
+        const withClicks = await mixClickAudioIntoBlob(blob, recording, settings);
+        if (withClicks) blob = withClicks;
+    } catch (e) {
+        console.warn('Click audio mix failed; exporting without click sounds:', e);
+    }
     onProgress(100);
 
     const extension = format === 'webm' ? 'webm' : 'mp4';
     downloadBlob(blob, `beunta_${Date.now()}.${extension}`);
+
+    // Non-blocking size validation: the download already happened. Surface a
+    // warning if the file exceeds the 100MB/min budget (or carry over the
+    // codec-fallback warning from selectExportCodec).
+    let warning = codecWarning;
+    const budget = SIZE_BUDGET_BYTES_PER_MIN * ((durationSec || 0) / 60);
+    if (budget > 0 && blob.size > budget) {
+        const mb = Math.round(blob.size / (1024 * 1024));
+        const overMsg = `Export is ${mb} MB — exceeds the 100MB/min target.`;
+        warning = warning ? `${warning} ${overMsg}` : overMsg;
+    }
+
+    return { sizeBytes: blob.size, durationSec, codec, warning };
 }
 
 // Alias for backward compatibility
@@ -31,7 +65,7 @@ export async function exportVideo(recording, onProgress) {
     return exportVideoMP4(recording, {
         zoomLevel: 2,
         zoomDuration: 800,
-        transitionDuration: 300,
+        transitionDuration: 600,
         segments: []
     }, onProgress);
 }
@@ -60,7 +94,7 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     const {
         Conversion, Input, Output,
         BlobSource, BufferTarget, Mp4OutputFormat, WebMOutputFormat,
-        ALL_FORMATS, canEncodeAudio, QUALITY_HIGH
+        ALL_FORMATS, canEncodeAudio, AudioSample
     } = await import('mediabunny');
 
     const isWebM = settings.format === 'webm';
@@ -72,25 +106,30 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
         }
     }
 
-    const input = new Input({
+    // Fresh mediabunny Input for each Conversion attempt (an Input's read
+    // cursor can't be safely reused across executes).
+    const makeInput = () => new Input({
         source: new BlobSource(recording.videoBlob),
-        formats: ALL_FORMATS
+        formats: ALL_FORMATS,
     });
 
-    const videoTrack = await input.getPrimaryVideoTrack();
+    // Probe input: dimensions + duration only (never executed).
+    const probeInput = makeInput();
+    const videoTrack = await probeInput.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error('No video track found in source');
 
     const targetResolution = settings.targetResolution || 1080;
     const { width: canvasW, height: canvasH } = calculateCanvasSize(videoTrack.squarePixelWidth, videoTrack.squarePixelHeight, settings.aspectRatio, targetResolution);
 
-    const target = new BufferTarget();
-    const output = new Output({
-        format: isWebM ? new WebMOutputFormat() : new Mp4OutputFormat(),
-        target
-    });
-
     const videoW = videoTrack.squarePixelWidth;
     const videoH = videoTrack.squarePixelHeight;
+
+    // Effective output duration (source duration clamped to the trim window),
+    // used for the post-export size-vs-budget check.
+    const sourceDuration = await videoTrack.computeDuration();
+    const trimStartSec = settings.trimStart || 0;
+    const trimEndSec = settings.trimEnd || sourceDuration;
+    const durationSec = Math.max(0, Math.min(trimEndSec, sourceDuration) - trimStartSec);
 
     // Build the SAME scene model the live preview uses, so the export is a
     // faithful reproduction. All cropping/zoom/framing geometry happens in
@@ -104,7 +143,6 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
         segments: settings.segments || [],
         recordingEvents: recording?.events || [],
     });
-    let lastCamera = null;
 
     // Output/composite canvas at the final target resolution.
     const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(canvasW, canvasH) : document.createElement('canvas');
@@ -133,98 +171,271 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     const fps = settings.fps || 60;
     const frameDurationMs = 1000 / fps;
 
-    const conversion = await Conversion.init({
-        input,
-        output,
-        trim: {
-            start: settings.trimStart || 0,
-            end: settings.trimEnd || undefined
-        },
-        video: {
-            codec: isWebM ? 'vp9' : 'avc',
-            processedWidth: canvasW,
-            processedHeight: canvasH,
-            frameRate: fps,
-            bitrate: settings.bitrate || QUALITY_HIGH,
-            hardwareAcceleration: 'no-preference',
-            process: (sample) => {
-                const currentTimeMs = sample.timestamp * 1000;
+    const tier = settings.exportQuality || 'best';
+    const audioBitrate = computeAudioBitrate({ format: isWebM ? 'webm' : 'mp4', tier });
 
-                // Constant frame spacing (guaranteed by the `frameRate` option
-                // above) means the camera can smooth over a fixed dt instead of
-                // the source's irregular sample spacing.
-                const targetCamera = calculateCameraPosition(currentTimeMs, model.events, model.cameraConfig);
-                const camera = interpolateCameraByTime(lastCamera, targetCamera, frameDurationMs);
-                lastCamera = camera;
+    // Pick the best encodable codec + a budget-aware bitrate. An explicit
+    // numeric settings.bitrate (legacy/auto-export callers) overrides the model.
+    let selection;
+    if (typeof settings.bitrate === 'number') {
+        selection = { attempts: [{ codec: isWebM ? 'vp9' : 'avc', bitrate: settings.bitrate, capped: false }], warning: null };
+    } else {
+        selection = await selectExportCodec({
+            format: isWebM ? 'webm' : 'mp4',
+            width: canvasW,
+            height: canvasH,
+            resolution: targetResolution,
+            fps,
+            tier,
+        });
+    }
 
-                // Blit the raw frame to the source canvas at native resolution.
-                sample.draw(srcCtx, 0, 0, videoW, videoH);
+    // Per-frame compositor shared across attempts. `lastCamera` is reset before
+    // each attempt so a retry starts the camera smoothing fresh.
+    let lastCamera = null;
+    const processFrame = (sample) => {
+        const currentTimeMs = sample.timestamp * 1000;
 
-                ctx.save();
-                ctx.scale(scaleX, scaleY);
-                drawSceneFrame(ctx, srcCanvas, currentTimeMs, model, {
-                    camera,
-                    backgroundBuffer,
-                    showShadow: settings.showShadow,
-                    showBorder: settings.showBorder,
-                    borderRadius: settings.borderRadius || 0,
-                    backgroundMode: settings.backgroundMode,
-                });
-                ctx.restore();
+        // Constant frame spacing (guaranteed by the `frameRate` option below)
+        // means the camera can smooth over a fixed dt instead of the source's
+        // irregular sample spacing.
+        const targetCamera = calculateCameraPosition(currentTimeMs, model.events, model.cameraConfig);
+        const camera = interpolateCameraByTime(lastCamera, targetCamera, frameDurationMs);
+        lastCamera = camera;
 
-                return canvas;
-            }
-        },
-        audio: settings.isMuted ? { discard: true } : {
-            codec: isWebM ? 'opus' : 'aac'
+        // Blit the raw frame to the source canvas at native resolution.
+        sample.draw(srcCtx, 0, 0, videoW, videoH);
+
+        ctx.save();
+        ctx.scale(scaleX, scaleY);
+        drawSceneFrame(ctx, srcCanvas, currentTimeMs, model, {
+            camera,
+            backgroundBuffer,
+            showShadow: settings.showShadow,
+            showBorder: settings.showBorder,
+            borderRadius: settings.borderRadius || 0,
+            backgroundMode: settings.backgroundMode,
+            // Render the (smoothed) cursor dot into the export, matching the
+            // preview, whenever Follow Cursor Mode is on.
+            showCursorHighlight: settings.showFollowCursor === true,
+            // "Include in recording" toggle: default on for legacy settings blobs.
+            showClickAnimations: settings.clickAnimationInRecording !== false,
+            clickStyle: settings.clickAnimationStyle,
+            clickOpacity: settings.clickAnimationOpacity,
+        });
+        ctx.restore();
+
+        return canvas;
+    };
+
+    // Try each encodable codec in preference order. The probe in
+    // selectExportCodec and Conversion.init's own isConfigSupported can
+    // disagree (a race / driver quirk), so a failed init or execute falls
+    // through to the next candidate rather than failing the whole export.
+    let lastError = null;
+    for (const attempt of selection.attempts) {
+        lastCamera = null;
+        const target = new BufferTarget();
+        const output = new Output({
+            format: isWebM ? new WebMOutputFormat() : new Mp4OutputFormat(),
+            target,
+        });
+        try {
+            const conversion = await Conversion.init({
+                input: makeInput(),
+                output,
+                trim: {
+                    start: settings.trimStart || 0,
+                    end: settings.trimEnd || undefined,
+                },
+                video: {
+                    codec: attempt.codec,
+                    processedWidth: canvasW,
+                    processedHeight: canvasH,
+                    frameRate: fps,
+                    bitrate: attempt.bitrate,
+                    hardwareAcceleration: 'no-preference',
+                    process: processFrame,
+                },
+                audio: settings.isMuted ? { discard: true } : buildAudioOptions(settings, isWebM, AudioSample, audioBitrate),
+            });
+
+            if (!conversion.isValid) throw new Error(`Conversion invalid for codec ${attempt.codec}`);
+
+            conversion.onProgress = (progress) => onProgress(Math.round(progress * 100));
+            await conversion.execute();
+
+            const blob = new Blob([target.buffer], { type: isWebM ? 'video/webm' : 'video/mp4' });
+            return { blob, codec: attempt.codec, warning: selection.warning, durationSec };
+        } catch (e) {
+            lastError = e;
+            console.warn(`Export attempt with codec ${attempt.codec} failed; trying next:`, e);
         }
+    }
+
+    throw lastError || new Error('Local conversion setup failed.');
+}
+
+// Build the mediabunny audio conversion options. When volume === 1 we keep the
+// cheap copy-through path (no re-encode). For any other gain we force a
+// transcode and scale every sample by the gain in a `process` callback. The
+// samples are read as interleaved f32; if an encoder ever rejects that we'd
+// fall back to per-plane 'f32-planar' copies.
+function buildAudioOptions(settings, isWebM, AudioSample, audioBitrate) {
+    const gain = settings.volume === undefined ? 1 : settings.volume;
+    const base = { codec: isWebM ? 'opus' : 'aac', bitrate: audioBitrate };
+    if (gain === 1) return base;
+
+    return {
+        ...base,
+        forceTranscode: true,
+        process: (sample) => {
+            const floatCount = sample.allocationSize({ planeIndex: 0, format: 'f32' }) / 4;
+            const buf = new Float32Array(floatCount);
+            sample.copyTo(buf, { planeIndex: 0, format: 'f32' });
+            for (let i = 0; i < buf.length; i++) {
+                buf[i] = Math.max(-1, Math.min(1, buf[i] * gain));
+            }
+            const out = new AudioSample({
+                data: buf,
+                format: 'f32',
+                numberOfChannels: sample.numberOfChannels,
+                sampleRate: sample.sampleRate,
+                timestamp: sample.timestamp,
+            });
+            sample.close();
+            return out;
+        },
+    };
+}
+
+/**
+ * Second export pass — composite click sounds into the audio track. Copies the
+ * finalized video packets verbatim (no re-encode) and replaces the audio with
+ * an OfflineAudioContext mix of the original audio + click blips. Returns a new
+ * Blob, or null when no click audio is wanted (the caller keeps the original).
+ *
+ * Timing: `runLocalConversion` rebases the output to start at 0 (Conversion
+ * subtracts the trim start), so a recorded click at source time `t` seconds
+ * lands in the output at `t - trimStart`. Working against the finalized,
+ * already-0-based blob keeps click alignment independent of any per-sample
+ * timestamp quirks in the conversion callbacks.
+ */
+async function mixClickAudioIntoBlob(intermediateBlob, recording, settings) {
+    const isWebM = settings.format === 'webm';
+    const clickSound = settings.clickSound;
+    const includeClicks = settings.clickAnimationInRecording !== false;
+
+    // Muted export drops click sound too (mirrors the preview, which gates
+    // click sounds on !isMuted). Also bail when the effect is off/silent.
+    if (settings.isMuted || !includeClicks || !clickSound || clickSound === 'none') {
+        return null;
+    }
+
+    const OfflineCtor = typeof self !== 'undefined' && (self.OfflineAudioContext || self.webkitOfflineAudioContext);
+    if (!OfflineCtor) return null; // no Web Audio here — keep the original
+
+    const trimStart = settings.trimStart || 0;
+    const trimEnd = settings.trimEnd || Infinity;
+    // Deduped clicks (the same filter the visuals use), mapped into output time.
+    const clickOffsets = filterRapidClicks(
+        (recording?.events || []).filter((e) => e.type === 'click' || e.type === 'dblclick')
+    )
+        .map((e) => (e.time || 0) / 1000)
+        .filter((t) => t >= trimStart && t <= trimEnd)
+        .map((t) => t - trimStart);
+
+    if (clickOffsets.length === 0) return null;
+
+    const {
+        Input, Output, BlobSource, BufferTarget, ALL_FORMATS,
+        Mp4OutputFormat, WebMOutputFormat, EncodedPacketSink, EncodedVideoPacketSource,
+        AudioBufferSource, canEncodeAudio,
+    } = await import('mediabunny');
+
+    const tier = settings.exportQuality || 'best';
+    const audioBitrate = computeAudioBitrate({ format: isWebM ? 'webm' : 'mp4', tier });
+
+    if (!isWebM && !(await canEncodeAudio('aac'))) {
+        const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
+        registerAacEncoder();
+    }
+
+    const input = new Input({ source: new BlobSource(intermediateBlob), formats: ALL_FORMATS });
+    const videoTrack = await input.getPrimaryVideoTrack();
+    if (!videoTrack) return null;
+
+    const videoDuration = await videoTrack.computeDuration();
+    // The intermediate's own audio is already volume-adjusted by the first pass;
+    // recordings with no audio track decode to null and the mix is clicks-only.
+    const originalAudio = await decodeBlobAudio(intermediateBlob, OfflineCtor);
+
+    const sampleRate = 48000;
+    const lengthSec = Math.max(videoDuration, originalAudio?.duration || 0, ...clickOffsets) + 0.5;
+    const offline = new OfflineCtor(2, Math.ceil(lengthSec * sampleRate), sampleRate);
+
+    if (originalAudio) {
+        const base = offline.createBufferSource();
+        base.buffer = originalAudio;
+        base.connect(offline.destination);
+        base.start(0);
+    }
+
+    // Clicks scale by volume × the shared master gain, matching preview loudness
+    // (original audio already carries its own volume from the first pass).
+    const clickGain = offline.createGain();
+    const vol = settings.volume === undefined ? 1 : settings.volume;
+    clickGain.gain.value = Math.max(0, Math.min(1, vol)) * CLICK_MASTER_GAIN;
+    clickGain.connect(offline.destination);
+    for (const when of clickOffsets) {
+        await scheduleClickSound(offline, clickGain, clickSound, when);
+    }
+
+    const mixed = await offline.startRendering();
+
+    // Remux: copy the video packets in decode order, attach the mixed audio.
+    const target = new BufferTarget();
+    const output = new Output({
+        format: isWebM ? new WebMOutputFormat() : new Mp4OutputFormat(),
+        target,
     });
+    const videoSource = new EncodedVideoPacketSource(videoTrack.codec);
+    output.addVideoTrack(videoSource);
+    const audioSource = new AudioBufferSource({ codec: isWebM ? 'opus' : 'aac', bitrate: audioBitrate });
+    output.addAudioTrack(audioSource);
+    await output.start();
 
-    if (!conversion.isValid) throw new Error('Local conversion setup failed.');
-
-    conversion.onProgress = (progress) => onProgress(Math.round(progress * 100));
-    await conversion.execute();
+    const decoderConfig = await videoTrack.getDecoderConfig();
+    const sink = new EncodedPacketSink(videoTrack);
+    let first = true;
+    for await (const packet of sink.packets()) {
+        await videoSource.add(packet, first ? { decoderConfig } : undefined);
+        first = false;
+    }
+    await audioSource.add(mixed);
+    await output.finalize();
 
     return new Blob([target.buffer], { type: isWebM ? 'video/webm' : 'video/mp4' });
 }
 
-// Maps a resolution preset (the target pixel count on the frame's short
-// edge - e.g. 1080 for "1080p", matching how vertical/square video
-// resolutions are conventionally named) + aspect ratio to a final
-// even-dimensioned canvas size.
-//
-// Standard aspect ratios (16:9, 9:16, 1:1, 4:5) always reframe to that short
-// edge regardless of source size - their fixed ratios all have a short edge
-// of 1080 (see STANDARD_RESOLUTIONS in coordinates.js), so scaling relative
-// to that 1080 baseline reaches the requested preset exactly (e.g. 2160 ->
-// 4K). 'Native' preserves the source's own aspect ratio and short edge,
-// clamped so it never upscales beyond the source's actual resolution.
-export function calculateCanvasSize(videoW, videoH, aspectRatio, targetResolution = 1080) {
-    let canvasW, canvasH;
-
-    if (aspectRatio === 'Native') {
-        const videoShortSide = Math.min(videoW, videoH);
-        const shortSide = Math.min(targetResolution, videoShortSide);
-        const scale = shortSide / videoShortSide;
-        canvasW = videoW * scale;
-        canvasH = videoH * scale;
-    } else {
-        const targetRatio = getAspectRatioValue(aspectRatio, videoW / videoH); // width/height
-        const scale = targetResolution / 1080;
-        if (targetRatio >= 1) {
-            canvasH = 1080 * scale;
-            canvasW = canvasH * targetRatio;
-        } else {
-            canvasW = 1080 * scale;
-            canvasH = canvasW / targetRatio;
-        }
+/**
+ * Decodes a media blob's audio into a single AudioBuffer, or null when the blob
+ * has no decodable audio track (a screen recording with the mic off and no
+ * system audio). Uses a throwaway OfflineAudioContext purely for decoding.
+ */
+async function decodeBlobAudio(blob, OfflineCtor) {
+    try {
+        // 1ch/1-frame context is enough to borrow decodeAudioData; the returned
+        // buffer keeps the source's own channel count / sample rate.
+        const ctx = new OfflineCtor(1, 1, 48000);
+        return await ctx.decodeAudioData(await blob.arrayBuffer());
+    } catch {
+        return null;
     }
-
-    return {
-        width: Math.floor(canvasW / 2) * 2,
-        height: Math.floor(canvasH / 2) * 2
-    };
 }
+// Re-exported for callers that historically imported it from here (e.g. tests);
+// the implementation now lives with the other scene geometry in coordinates.js.
+export { calculateCanvasSize };
 
 async function preloadImage(src) {
     try {

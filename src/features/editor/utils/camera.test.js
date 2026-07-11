@@ -67,13 +67,47 @@ describe('calculateCameraPosition', () => {
         expect(camera.srcW).toBe(250); // videoWidth / 4
     });
 
-    it('pans smoothly toward the cursor in follow mode when no zoom is active', () => {
-        const events = [{ type: 'follow', time: 500, x: 0.8, y: 0.8 }];
-        const camera = calculateCameraPosition(600, events, dimensions);
-        // Follow mode lerps toward a 1.5x view of the cursor at a slow factor (0.05),
-        // so a single call only nudges the camera slightly off the full-frame default.
+    // Follow mode is now driven by precomputed anchor segments (built in
+    // scene-renderer from the interaction log), resolved through the same
+    // window/phase machinery as zoom segments. dimensions.followSegments carries
+    // them; raw follow/move events no longer move the camera.
+    const followAnchor = { type: 'zoom', source: 'follow', time: 1000, duration: 800, x: 0.5, y: 0.5, zoomLevel: 1.5 };
+
+    it('holds a steady 1.5x view centered on the anchor during the follow hold', () => {
+        // hold window is [time, time + duration) = [1000, 1800)
+        const camera = calculateCameraPosition(1400, [], { ...dimensions, followSegments: [followAnchor] });
+        expect(camera.zoom).toBeCloseTo(1.5);
+        expect(camera.srcW).toBeCloseTo(1000 / 1.5); // videoWidth / FOLLOW_ZOOM_LEVEL
+        expect(camera.srcH).toBeCloseTo(1000 / 1.5);
+        // Centered on (0.5, 0.5): srcX = 500 - (666.67 / 2).
+        expect(camera.srcX).toBeCloseTo(500 - (1000 / 1.5) / 2);
+        expect(camera.srcY).toBeCloseTo(500 - (1000 / 1.5) / 2);
+    });
+
+    it('eases into the follow anchor during its zoom-in window', () => {
+        // zoom-in window is [time - transitionDuration, time) = [700, 1000)
+        const camera = calculateCameraPosition(850, [], { ...dimensions, followSegments: [followAnchor] });
         expect(camera.zoom).toBeGreaterThan(1);
         expect(camera.zoom).toBeLessThan(1.5);
+    });
+
+    it('returns to the full frame after the follow anchor zooms out', () => {
+        // zoom-out completes at time + duration + transitionDuration = 2100.
+        const camera = calculateCameraPosition(5000, [], { ...dimensions, followSegments: [followAnchor] });
+        expect(camera).toEqual({ srcX: 0, srcY: 0, srcW: 1000, srcH: 1000, zoom: 1 });
+    });
+
+    it('is a pure function of time (two calls at the same T are identical)', () => {
+        const opts = { ...dimensions, followSegments: [followAnchor] };
+        const a = calculateCameraPosition(1400, [], opts);
+        const b = calculateCameraPosition(1400, [], opts);
+        expect(a).toEqual(b);
+    });
+
+    it('ignores raw follow/move events (only precomputed anchors move the camera)', () => {
+        const events = [{ type: 'follow', time: 500, x: 0.8, y: 0.8 }, { type: 'move', time: 600, x: 0.8, y: 0.8 }];
+        const camera = calculateCameraPosition(600, events, dimensions);
+        expect(camera).toEqual({ srcX: 0, srcY: 0, srcW: 1000, srcH: 1000, zoom: 1 });
     });
 
     it('resolves a standalone crop segment the same way a zoom segment would (backward compat)', () => {
@@ -102,11 +136,9 @@ describe('calculateCameraPosition', () => {
     });
 
     it('suppresses follow-cursor mode while a crop-only segment is active', () => {
-        const events = [
-            { type: 'crop', time: 1000, x: 0.5, y: 0.5, cropWidth: 400, cropHeight: 400 },
-            { type: 'follow', time: 1000, x: 0.9, y: 0.9 },
-        ];
-        const camera = calculateCameraPosition(1400, events, dimensions);
+        const events = [{ type: 'crop', time: 1000, x: 0.5, y: 0.5, cropWidth: 400, cropHeight: 400 }];
+        const followSegments = [{ type: 'zoom', source: 'follow', time: 1000, duration: 800, x: 0.9, y: 0.9, zoomLevel: 1.5 }];
+        const camera = calculateCameraPosition(1400, events, { ...dimensions, followSegments });
         expect(camera.srcW).toBe(400);
         expect(camera.srcH).toBe(400);
     });

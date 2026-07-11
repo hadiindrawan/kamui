@@ -34,6 +34,11 @@
     flex-shrink: 0;
 }
 
+.toast-warning svg {
+    color: var(--warn);
+    flex-shrink: 0;
+}
+
 @keyframes toast-in {
     from {
         opacity: 0;

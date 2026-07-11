@@ -29,6 +29,44 @@ export function getAspectRatioValue(aspectRatio, fallback) {
     return ASPECT_RATIOS[aspectRatio] || ASPECT_RATIOS['16:9'];
 }
 
+// Maps a resolution preset (the target pixel count on the frame's short
+// edge - e.g. 1080 for "1080p", matching how vertical/square video
+// resolutions are conventionally named) + aspect ratio to a final
+// even-dimensioned canvas size.
+//
+// Standard aspect ratios (16:9, 9:16, 1:1, 4:5) always reframe to that short
+// edge regardless of source size - their fixed ratios all have a short edge
+// of 1080 (see STANDARD_RESOLUTIONS above), so scaling relative to that 1080
+// baseline reaches the requested preset exactly (e.g. 2160 -> 4K). 'Native'
+// preserves the source's own aspect ratio and short edge, clamped so it never
+// upscales beyond the source's actual resolution.
+export function calculateCanvasSize(videoW, videoH, aspectRatio, targetResolution = 1080) {
+    let canvasW, canvasH;
+
+    if (aspectRatio === 'Native') {
+        const videoShortSide = Math.min(videoW, videoH);
+        const shortSide = Math.min(targetResolution, videoShortSide);
+        const scale = shortSide / videoShortSide;
+        canvasW = videoW * scale;
+        canvasH = videoH * scale;
+    } else {
+        const targetRatio = getAspectRatioValue(aspectRatio, videoW / videoH); // width/height
+        const scale = targetResolution / 1080;
+        if (targetRatio >= 1) {
+            canvasH = 1080 * scale;
+            canvasW = canvasH * targetRatio;
+        } else {
+            canvasW = 1080 * scale;
+            canvasH = canvasW / targetRatio;
+        }
+    }
+
+    return {
+        width: Math.floor(canvasW / 2) * 2,
+        height: Math.floor(canvasH / 2) * 2
+    };
+}
+
 /**
  * Computes the scene (aspect-ratio canvas) dimensions and where the source
  * video is placed within it.

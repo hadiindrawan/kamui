@@ -1,8 +1,12 @@
 import React from 'react';
 import { Film, Play, Zap, HardDrive } from 'lucide-react';
 import { formatTime } from '../hooks/useEditorState.js';
+import PresetSelector from './PresetSelector.jsx';
 
-export default function EditorToolbar({ segmentCount, recordingSizeBytes, hasPendingEdits, onSaveChanges, currentTime, duration }) {
+export default function EditorToolbar({
+    segmentCount, recordingSizeBytes, hasPendingEdits, onSaveChanges, currentTime, duration,
+    presets, activePresetId, onApplyPreset, onOpenPresetManager,
+}) {
     return (
         <header className="editor-header">
             <div className="header-left">
@@ -16,6 +20,12 @@ export default function EditorToolbar({ segmentCount, recordingSizeBytes, hasPen
                 </div>
             </div>
             <div className="header-right">
+                <PresetSelector
+                    presets={presets}
+                    activePresetId={activePresetId}
+                    onApplyPreset={onApplyPreset}
+                    onOpenManager={onOpenPresetManager}
+                />
                 {hasPendingEdits && (
                     <button className="btn-save-changes-header" onClick={onSaveChanges} title="Save timeline edits (Cmd+s)">
                         Save Changes (Cmd+s)

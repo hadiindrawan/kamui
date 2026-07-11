@@ -10,7 +10,10 @@ import FramingPanel from './components/FramingPanel.jsx';
 import ExportPanel from './components/ExportPanel.jsx';
 import ZoomTargetOverlay from './components/ZoomTargetOverlay.jsx';
 import CropPanOverlay from './components/CropPanOverlay.jsx';
+import PresetManagerModal from './components/PresetManagerModal.jsx';
+import AutoExportCountdown from './components/AutoExportCountdown.jsx';
 import { useEditorState } from './hooks/useEditorState.js';
+import { usePresets } from './hooks/usePresets.js';
 import { ToastProvider } from '../../shared/components/Toast.jsx';
 import './editor.css';
 
@@ -38,17 +41,23 @@ function EditorContent() {
         backgroundValue, setBackgroundValue, backgroundBlur, setBackgroundBlur, insetPadding, setInsetPadding,
         cropToFill, setCropToFill, cropPanX, cropPanY, updateCropPan, cropZoom, setCropZoom,
         showShadow, setShowShadow, showBorder, setShowBorder, borderRadius, setBorderRadius,
-        isMuted, setIsMuted, showFollowCursor, setShowFollowCursor,
+        isMuted, setIsMuted, volume, setVolume, showFollowCursor, setShowFollowCursor,
+        cursorSmoothing, setCursorSmoothing,
+        clickAnimationStyle, setClickAnimationStyle, clickAnimationOpacity, setClickAnimationOpacity,
+        clickSound, setClickSound, clickAnimationInRecording, setClickAnimationInRecording,
         trimStart, trimEnd, setTrimStart, setTrimEnd,
         segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
         resetTimeline, handleUndo, handleRedo, saveHistory, handleTrimChange,
         tracks, addTrack, removeTrack,
         hasPendingEdits, setHasPendingEdits, handleSaveChanges,
         isExporting, exportProgress, exportResolution, setExportResolution, exportFps, setExportFps,
-        exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
+        exportFormat, setExportFormat, conversionService, setConversionService,
+        exportQuality, setExportQuality, handleExport,
         handleFileUpload,
         getVideoRect, getFrameRect, getVisibleVideoRect, getSceneLayout,
     } = state;
+
+    const presets = usePresets(state);
 
     const selectedSegment = segments.find((s) => s.id === selectedSegmentId);
     const showZoomOverlay = selectedSegment && selectedSegment.positionMode === 'fixed';
@@ -120,6 +129,29 @@ function EditorContent() {
                 onSaveChanges={handleSaveChanges}
                 currentTime={currentTime}
                 duration={duration}
+                presets={presets.presets}
+                activePresetId={presets.activePresetId}
+                onApplyPreset={presets.applyPreset}
+                onOpenPresetManager={presets.openManager}
+            />
+
+            <AutoExportCountdown countdown={presets.countdown} onCancel={presets.cancelCountdown} />
+
+            <PresetManagerModal
+                open={presets.managerOpen}
+                onClose={presets.closeManager}
+                presets={presets.presets}
+                activePresetId={presets.activePresetId}
+                storageDegraded={presets.storageDegraded}
+                globalAutoExport={presets.globalAutoExport}
+                onSetGlobalAutoExport={presets.setGlobalAutoExport}
+                globalCursorSmoothing={presets.globalCursorSmoothing}
+                onSetGlobalCursorSmoothing={presets.setGlobalCursorSmoothing}
+                onSaveCurrentAsPreset={presets.saveCurrentAsPreset}
+                onApplyPreset={presets.applyPreset}
+                onSetPresetAutoExport={presets.setPresetAutoExport}
+                onDeletePreset={presets.deletePresetById}
+                onClearActive={() => presets.setActivePreset(null)}
             />
 
             <main className="editor-main">
@@ -149,7 +181,12 @@ function EditorContent() {
                             showBorder={showBorder}
                             borderRadius={borderRadius}
                             isMuted={isMuted}
+                            volume={volume}
                             showFollowCursor={showFollowCursor}
+                            cursorSmoothing={cursorSmoothing}
+                            clickAnimationStyle={clickAnimationStyle}
+                            clickAnimationOpacity={clickAnimationOpacity}
+                            clickSound={clickSound}
                             onTimeUpdate={handleTimeUpdate}
                             onPlaybackEnded={handlePlaybackEnded}
                             onFrameTime={handleFrameTime}
@@ -201,6 +238,16 @@ function EditorContent() {
                             setHasPendingEdits={setHasPendingEdits}
                             playbackSpeed={playbackSpeed}
                             setPlaybackSpeed={setPlaybackSpeed}
+                            cursorSmoothing={cursorSmoothing}
+                            setCursorSmoothing={setCursorSmoothing}
+                            clickAnimationStyle={clickAnimationStyle}
+                            setClickAnimationStyle={setClickAnimationStyle}
+                            clickAnimationOpacity={clickAnimationOpacity}
+                            setClickAnimationOpacity={setClickAnimationOpacity}
+                            clickSound={clickSound}
+                            setClickSound={setClickSound}
+                            clickAnimationInRecording={clickAnimationInRecording}
+                            setClickAnimationInRecording={setClickAnimationInRecording}
                             trimStart={trimStart}
                             trimEnd={trimEnd}
                             duration={duration}
@@ -271,6 +318,8 @@ function EditorContent() {
                 setLoopPlayback={setLoopPlayback}
                 isMuted={isMuted}
                 setIsMuted={setIsMuted}
+                volume={volume}
+                setVolume={setVolume}
                 isExporting={isExporting}
                 exportProgress={exportProgress}
                 exportResolution={exportResolution}
@@ -281,6 +330,14 @@ function EditorContent() {
                 setExportFormat={setExportFormat}
                 conversionService={conversionService}
                 setConversionService={setConversionService}
+                exportQuality={exportQuality}
+                setExportQuality={setExportQuality}
+                aspectRatio={aspectRatio}
+                videoWidth={recording?.resolution?.width}
+                videoHeight={recording?.resolution?.height}
+                duration={duration}
+                trimStart={trimStart}
+                trimEnd={trimEnd}
                 onExport={handleExport}
             />
         </div>

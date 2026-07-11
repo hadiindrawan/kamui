@@ -1,18 +1,21 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { computeSceneLayout, mapSceneRectToContainer, computeCoverVideoRect } from '../utils/coordinates.js';
 import { generateAutoZoomSegments, resolveIntensity } from '../utils/auto-zoom.js';
+import { capturePresetSettings, applyPresetSettings } from '../utils/preset-fields.js';
+import { DEFAULT_CURSOR_SMOOTHING } from '../utils/cursor-smoothing.js';
 import { useToast } from '../../../shared/hooks/useToast.js';
 
 export const INTERACTION_TYPES = new Set(['click', 'dblclick', 'typing', 'selection']);
 const MIN_SEGMENT_DISTANCE_MS = 1000;
 
 // Resolution presets: `resolution` is the target pixel count on the frame's
-// short edge (see calculateCanvasSize in utils/export.js for why). Bitrates
-// are tuned for 60fps output.
+// short edge (see calculateCanvasSize in utils/export.js for why). Bitrate is
+// no longer fixed here — it's computed per codec/fps/quality-tier at export
+// time by selectExportCodec (see utils/export-codec.js).
 export const RESOLUTION_PRESETS = {
-    '2160': { resolution: 2160, bitrate: 45_000_000, label: '4K (2160p)' },
-    '1080': { resolution: 1080, bitrate: 16_000_000, label: '1080p (Full HD)' },
-    '720': { resolution: 720, bitrate: 8_000_000, label: '720p (HD)' },
+    '2160': { resolution: 2160, label: '4K (2160p)' },
+    '1080': { resolution: 1080, label: '1080p (Full HD)' },
+    '720': { resolution: 720, label: '720p (HD)' },
 };
 const DEFAULT_EXPORT_FPS = 60;
 
@@ -117,11 +120,16 @@ export function useEditorState() {
     const [exportFps, setExportFps] = useState(DEFAULT_EXPORT_FPS);
     const [exportFormat, setExportFormat] = useState('mp4');
     const [conversionService, setConversionService] = useState('local');
+    // Quality tier -> bitrate model in utils/export-codec.js ('best' | 'balanced' | 'smallest').
+    const [exportQuality, setExportQuality] = useState('best');
     const { showToast } = useToast();
 
     const [zoomLevel, setZoomLevel] = useState(2);
     const [zoomDuration, setZoomDuration] = useState(800);
-    const [transitionDuration, setTransitionDuration] = useState(300);
+    // Slower by default: a short ramp reads as an abrupt cut, especially with
+    // easeInOutQuart's steep midsection. 600ms gives the zoom-in/out motion
+    // enough room to actually read as eased rather than snappy.
+    const [transitionDuration, setTransitionDuration] = useState(600);
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
     const [autoZoomIntensity, setAutoZoomIntensity] = useState('medium'); // 'subtle' | 'medium' | 'strong'
 
@@ -139,7 +147,14 @@ export function useEditorState() {
     const [showBorder, setShowBorder] = useState(false);
     const [borderRadius, setBorderRadius] = useState(12);
     const [isMuted, setIsMuted] = useState(false);
+    const [volume, setVolume] = useState(1);
     const [showFollowCursor, setShowFollowCursor] = useState(false);
+    const [cursorSmoothing, setCursorSmoothing] = useState(DEFAULT_CURSOR_SMOOTHING);
+
+    const [clickAnimationStyle, setClickAnimationStyle] = useState('ripple');
+    const [clickAnimationOpacity, setClickAnimationOpacity] = useState('med');
+    const [clickSound, setClickSound] = useState('click');
+    const [clickAnimationInRecording, setClickAnimationInRecording] = useState(true);
 
     const [trimStart, setTrimStart] = useState(0);
     const [trimEnd, setTrimEnd] = useState(0);
@@ -158,6 +173,18 @@ export function useEditorState() {
     const canvasPlayerRef = useRef(null);
     const canvasContainerRef = useRef(null);
     const hasInitializedSegments = useRef(false);
+
+    // Stable bag of the preset-field setters (useState setters never change),
+    // so applyPresetSettings can drive them from load/preset-apply paths.
+    const editorSetters = useMemo(() => ({
+        setZoomLevel, setAutoZoomIntensity, setZoomDuration, setTransitionDuration,
+        setPlaybackSpeed, setAspectRatio, setCropToFill, setCropZoom, setCropPanX, setCropPanY,
+        setInsetPadding, setShowShadow, setShowBorder, setBorderRadius,
+        setBackgroundMode, setBackgroundColor, setBackgroundValue, setBackgroundBlur,
+        setShowFollowCursor, setCursorSmoothing, setIsMuted, setVolume,
+        setClickAnimationStyle, setClickAnimationOpacity, setClickSound, setClickAnimationInRecording,
+        setExportResolution, setExportFps, setExportFormat, setConversionService,
+    }), []);
 
     const saveHistory = useCallback((newSegments) => {
         const newHistory = history.slice(0, historyIndex + 1);
@@ -215,25 +242,9 @@ export function useEditorState() {
 
             if (rec.editorSettings) {
                 const s = rec.editorSettings;
-                if (s.zoomLevel !== undefined) setZoomLevel(s.zoomLevel);
-                if (s.zoomDuration !== undefined) setZoomDuration(s.zoomDuration);
-                if (s.transitionDuration !== undefined) setTransitionDuration(s.transitionDuration);
-                if (s.autoZoomIntensity !== undefined) setAutoZoomIntensity(s.autoZoomIntensity);
-                if (s.playbackSpeed !== undefined) setPlaybackSpeed(s.playbackSpeed);
-                if (s.aspectRatio !== undefined) setAspectRatio(s.aspectRatio);
-                if (s.backgroundMode !== undefined) setBackgroundMode(s.backgroundMode);
-                if (s.backgroundColor !== undefined) setBackgroundColor(s.backgroundColor);
-                if (s.backgroundValue !== undefined) setBackgroundValue(s.backgroundValue);
-                if (s.backgroundBlur !== undefined) setBackgroundBlur(s.backgroundBlur);
-                if (s.insetPadding !== undefined) setInsetPadding(s.insetPadding);
-                if (s.cropToFill !== undefined) setCropToFill(s.cropToFill);
-                if (s.cropPanX !== undefined) setCropPanX(s.cropPanX);
-                if (s.cropPanY !== undefined) setCropPanY(s.cropPanY);
-                if (s.cropZoom !== undefined) setCropZoom(s.cropZoom);
-                if (s.showShadow !== undefined) setShowShadow(s.showShadow);
-                if (s.showBorder !== undefined) setShowBorder(s.showBorder);
-                if (s.borderRadius !== undefined) setBorderRadius(s.borderRadius);
-                if (s.isMuted !== undefined) setIsMuted(s.isMuted);
+                // Shared preset fields via the descriptor (setters are stable).
+                applyPresetSettings(s, editorSetters);
+                // Per-recording fields (not part of presets).
                 if (s.trimStart !== undefined) setTrimStart(s.trimStart);
                 if (s.trimEnd !== undefined) setTrimEnd(s.trimEnd);
                 if (s.loopPlayback !== undefined) setLoopPlayback(s.loopPlayback);
@@ -481,25 +492,17 @@ export function useEditorState() {
                 await updateRecording(recordingId, {
                     segments,
                     editorSettings: {
-                        zoomLevel,
-                        zoomDuration,
-                        transitionDuration,
-                        autoZoomIntensity,
-                        playbackSpeed,
-                        aspectRatio,
-                        backgroundMode,
-                        backgroundColor,
-                        backgroundValue,
-                        backgroundBlur,
-                        insetPadding,
-                        cropToFill,
-                        cropPanX,
-                        cropPanY,
-                        cropZoom,
-                        showShadow,
-                        showBorder,
-                        borderRadius,
-                        isMuted,
+                        // Shared preset fields (single source of truth).
+                        ...capturePresetSettings({
+                            zoomLevel, autoZoomIntensity, zoomDuration, transitionDuration,
+                            playbackSpeed, aspectRatio, cropToFill, cropZoom, cropPanX, cropPanY,
+                            insetPadding, showShadow, showBorder, borderRadius,
+                            backgroundMode, backgroundColor, backgroundValue, backgroundBlur,
+                            showFollowCursor, cursorSmoothing, isMuted, volume,
+                            clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording,
+                            exportResolution, exportFps, exportFormat, conversionService, exportQuality,
+                        }),
+                        // Per-recording fields (not part of presets).
                         trimStart,
                         trimEnd,
                         tracks,
@@ -514,7 +517,9 @@ export function useEditorState() {
         canvasPlayerRef.current?.seekTo(currentTime);
     }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, autoZoomIntensity, playbackSpeed, aspectRatio,
         backgroundMode, backgroundColor, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
-        showShadow, showBorder, borderRadius, isMuted, trimStart, trimEnd, tracks, loopPlayback]);
+        showShadow, showBorder, borderRadius, isMuted, volume, showFollowCursor, cursorSmoothing,
+        clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording,
+        exportResolution, exportFps, exportFormat, conversionService, exportQuality, trimStart, trimEnd, tracks, loopPlayback]);
 
     const handleTrimChange = useCallback((start, end) => {
         setTrimStart(start);
@@ -522,36 +527,53 @@ export function useEditorState() {
         setHasPendingEdits(true);
     }, []);
 
-    const handleExport = useCallback(async () => {
+    const handleExport = useCallback(async (overrides = {}) => {
         setIsExporting(true);
         setExportProgress(0);
         try {
             const { exportVideoMP4 } = await import('../utils/export.js');
-            const preset = RESOLUTION_PRESETS[exportResolution] || RESOLUTION_PRESETS['1080'];
+            // Shared config via the descriptor, with optional overrides (e.g. a
+            // preset's export settings) winning over current state.
+            const merged = {
+                ...capturePresetSettings({
+                    zoomLevel, autoZoomIntensity, zoomDuration, transitionDuration,
+                    playbackSpeed, aspectRatio, cropToFill, cropZoom, cropPanX, cropPanY,
+                    insetPadding, showShadow, showBorder, borderRadius,
+                    backgroundMode, backgroundColor, backgroundValue, backgroundBlur,
+                    showFollowCursor, cursorSmoothing, isMuted, volume,
+                    clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording,
+                    exportResolution, exportFps, exportFormat, conversionService, exportQuality,
+                }),
+                ...overrides,
+            };
+            const preset = RESOLUTION_PRESETS[merged.exportResolution] || RESOLUTION_PRESETS['1080'];
 
-            await exportVideoMP4(
+            const result = await exportVideoMP4(
                 recording,
                 {
-                    zoomLevel, zoomDuration, transitionDuration, segments, trimStart, trimEnd,
-                    playbackSpeed, isMuted, targetResolution: preset.resolution, bitrate: preset.bitrate,
-                    fps: exportFps, format: exportFormat,
-                    conversionService, aspectRatio, backgroundColor, backgroundMode, backgroundValue,
-                    backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showShadow, showBorder,
-                    borderRadius, showFollowCursor,
+                    ...merged,
+                    segments, trimStart, trimEnd,
+                    targetResolution: preset.resolution,
+                    fps: merged.exportFps, format: merged.exportFormat,
+                    exportQuality: merged.exportQuality || 'best',
                 },
                 (progress) => setExportProgress(progress)
             );
             showToast({ type: 'success', message: 'Video exported' });
+            if (result?.warning) {
+                showToast({ type: 'warning', message: result.warning });
+            }
         } catch (err) {
             console.error('Export error:', err);
             showToast({ type: 'error', message: 'Export failed: ' + err.message });
         } finally {
             setIsExporting(false);
         }
-    }, [recording, zoomLevel, zoomDuration, transitionDuration, segments, trimStart, trimEnd, playbackSpeed,
-        isMuted, exportResolution, exportFps, exportFormat, conversionService, aspectRatio, backgroundColor,
+    }, [recording, zoomLevel, autoZoomIntensity, zoomDuration, transitionDuration, segments, trimStart, trimEnd, playbackSpeed,
+        isMuted, volume, exportResolution, exportFps, exportFormat, conversionService, exportQuality, aspectRatio, backgroundColor,
         backgroundMode, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
-        showShadow, showBorder, borderRadius, showFollowCursor, showToast]);
+        showShadow, showBorder, borderRadius, showFollowCursor, cursorSmoothing,
+        clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording, showToast]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -741,7 +763,11 @@ export function useEditorState() {
         cropToFill, setCropToFill, cropPanX, setCropPanX, cropPanY, setCropPanY, updateCropPan,
         cropZoom, setCropZoom,
         showShadow, setShowShadow, showBorder, setShowBorder, borderRadius, setBorderRadius,
-        isMuted, setIsMuted, showFollowCursor, setShowFollowCursor,
+        isMuted, setIsMuted, volume, setVolume, showFollowCursor, setShowFollowCursor,
+        cursorSmoothing, setCursorSmoothing,
+        // click effects
+        clickAnimationStyle, setClickAnimationStyle, clickAnimationOpacity, setClickAnimationOpacity,
+        clickSound, setClickSound, clickAnimationInRecording, setClickAnimationInRecording,
         // trim
         trimStart, setTrimStart, trimEnd, setTrimEnd, handleTrimChange,
         // segments + history
@@ -753,7 +779,8 @@ export function useEditorState() {
         hasPendingEdits, setHasPendingEdits, savedSegments, handleSaveChanges,
         // export
         isExporting, exportProgress, exportResolution, setExportResolution, exportFps, setExportFps,
-        exportFormat, setExportFormat, conversionService, setConversionService, handleExport,
+        exportFormat, setExportFormat, conversionService, setConversionService,
+        exportQuality, setExportQuality, handleExport,
         // upload
         handleFileUpload,
         // derived

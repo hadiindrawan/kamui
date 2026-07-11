@@ -7,6 +7,10 @@ import Editor from './editor';
 jest.mock('../../storage/indexeddb.js', () => ({
     getRecording: jest.fn().mockResolvedValue({ id: 'mock-id', events: [] }),
     updateRecording: jest.fn().mockResolvedValue(),
+    getAllPresets: jest.fn().mockResolvedValue([]),
+    getPreset: jest.fn().mockResolvedValue(null),
+    savePreset: jest.fn().mockResolvedValue(),
+    deletePreset: jest.fn().mockResolvedValue(),
 }));
 
 // Mock the canvas player and timeline as they are complex to test directly within the editor

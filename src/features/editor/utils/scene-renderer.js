@@ -17,10 +17,17 @@
  */
 
 import { computeSceneLayout, mapVideoPointToScene } from './coordinates.js';
+import { drawClickAnimations, filterRapidClicks, ACCENT_RGB } from './click-animations.js';
+import { buildSmoothedCursorPath, sampleCursorPath, DEFAULT_CURSOR_SMOOTHING } from './cursor-smoothing.js';
+import { buildFollowCameraSegments } from './follow-camera.js';
 
 const BLUR_AMOUNTS = { none: 0, light: 4, moderate: 12, strong: 24 };
-// Lavender accent (matches the Linear redesign) used for cursor + click FX.
-const ACCENT_RGB = '94, 105, 209';
+
+// Segment types that take control of the camera (mirrors camera.js
+// findZoomTarget/findCropTarget). Follow anchors defer to these: interactions
+// inside their windows don't open anchors, and open anchors truncate at the
+// next such window's start.
+const CAMERA_OWNING_TYPES = new Set(['click', 'dblclick', 'zoom', 'typing', 'selection', 'focus', 'crop']);
 
 /**
  * Basic parser for the CSS-string gradients the UI stores as presets, e.g.
@@ -88,17 +95,78 @@ export function buildSceneModel({ videoWidth, videoHeight, settings, segments = 
         return { ...seg, time: seg.startTime, type: seg.type || 'click', x, y, keyframes };
     });
 
+    const cursorEvents = [];
     if (settings.showFollowCursor && recordingEvents) {
         for (const e of recordingEvents) {
             if (e.type !== 'follow' && e.type !== 'move') continue;
             const { x, y } = mapVideoPointToScene(e.x, e.y, layout);
-            events.push({ ...e, x, y });
+            const mapped = { ...e, x, y };
+            events.push(mapped);
+            cursorEvents.push(mapped);
         }
+    }
+
+    // Recorded clicks drive the click animations (and the preview click
+    // sounds). Rapid clicks are deduped HERE, once, so the render loop, the
+    // exporter, and the sound trigger all agree on which clicks fire.
+    const clickEvents = filterRapidClicks(
+        (recordingEvents || []).filter((e) => e.type === 'click' || e.type === 'dblclick')
+    ).map((e) => {
+        const { x, y } = mapVideoPointToScene(e.x, e.y, layout);
+        return { ...e, x, y };
+    });
+
+    // Pre-filter the cursor path once (scene space) so the rendered dot uses a
+    // smooth curve, and preview + export stay in sync. This path drives the
+    // rendered dot only (the camera no longer chases raw movement); null
+    // (smoothing off / no cursor events) means "use raw samples".
+    let cursorPath = null;
+    if (settings.showFollowCursor) {
+        cursorPath = buildSmoothedCursorPath(
+            cursorEvents,
+            settings.cursorSmoothing ?? DEFAULT_CURSOR_SMOOTHING,
+            clickEvents,
+        );
+    }
+
+    // Follow-cursor camera anchors: precomputed from the interaction log (clicks
+    // + typing/selection/focus) so the camera holds on meaningful actions and
+    // eases out when the cursor leaves the viewport, instead of chasing every
+    // movement sample. Interactions that a real zoom/crop segment already covers
+    // are excluded (and open anchors truncate at the next such window) so follow
+    // and auto-zoom don't fight over the camera.
+    let followSegments = null;
+    if (settings.showFollowCursor) {
+        const zoomDuration = settings.zoomDuration ?? 800;
+        const transitionDuration = settings.transitionDuration ?? 600;
+        const interactionEvents = (recordingEvents || [])
+            .filter((e) => e.type === 'typing' || e.type === 'selection' || e.type === 'focus')
+            .map((e) => {
+                const { x, y } = mapVideoPointToScene(e.x, e.y, layout);
+                return { ...e, x, y };
+            });
+        const interactions = [...clickEvents, ...interactionEvents].sort((a, b) => a.time - b.time);
+        const zoomWindows = events
+            .filter((e) => CAMERA_OWNING_TYPES.has(e.type))
+            .map((e) => ({
+                start: e.time - transitionDuration,
+                end: e.time + (e.duration ?? zoomDuration) + transitionDuration,
+            }));
+        followSegments = buildFollowCameraSegments({
+            interactions,
+            // Raw samples (not the smoothed dot path): boundary + velocity checks
+            // need true cursor speed, which smoothing would flatten.
+            cursorSamples: cursorEvents,
+            zoomWindows,
+            transitionDuration,
+        });
     }
 
     return {
         layout,
         events,
+        clickEvents,
+        cursorPath,
         cameraConfig: {
             videoWidth: layout.width,
             videoHeight: layout.height,
@@ -107,6 +175,7 @@ export function buildSceneModel({ videoWidth, videoHeight, settings, segments = 
             zoomLevel: settings.zoomLevel,
             zoomDuration: settings.zoomDuration,
             transitionDuration: settings.transitionDuration,
+            followSegments,
         },
     };
 }
@@ -176,8 +245,12 @@ export function drawSceneFrame(ctx, frameSource, timeMs, model, opts = {}) {
         backgroundMode = 'hidden',
         showCursorHighlight = false,
         showClickAnimations = true,
+        clickStyle = 'ripple',
+        clickOpacity = 'med',
         cursorScale = 1,
     } = opts;
+    const clickEvents = opts.clickEvents || model.clickEvents || [];
+    const cursorPath = opts.cursorPath !== undefined ? opts.cursorPath : model.cursorPath;
 
     const { width, height, vX, vY, vW, vH, sx, sy, sW, sH } = layout;
 
@@ -232,52 +305,53 @@ export function drawSceneFrame(ctx, frameSource, timeMs, model, opts = {}) {
         }
     }
 
-    drawSceneOverlays(ctx, timeMs, events, width, height, { showCursorHighlight, showClickAnimations, cursorScale });
+    drawSceneOverlays(ctx, timeMs, events, width, height, {
+        showCursorHighlight, showClickAnimations, cursorScale,
+        clickEvents, clickStyle, clickOpacity, cursorPath,
+    });
 
     ctx.restore();
 }
 
 /**
- * Click ripples (+ optional cursor highlight), drawn inside the camera
+ * Click animations (+ optional cursor highlight), drawn inside the camera
  * transform so they track the zoomed frame. Stateless — derived purely from
  * events + time, so preview and export produce identical FX.
  */
 export function drawSceneOverlays(ctx, timeMs, events, sceneW, sceneH, opts = {}) {
-    const { showCursorHighlight = false, showClickAnimations = true, cursorScale = 1 } = opts;
+    const {
+        showCursorHighlight = false,
+        showClickAnimations = true,
+        clickStyle = 'ripple',
+        clickOpacity = 'med',
+        cursorScale = 1,
+    } = opts;
 
     if (showClickAnimations) {
-        for (const event of events) {
-            if (event.type !== 'click' && event.type !== 'dblclick') continue;
-            const elapsed = timeMs - event.time;
-            if (elapsed < 0 || elapsed > 600) continue;
-
-            const progress = elapsed / 600;
-            const cx = event.x * sceneW;
-            const cy = event.y * sceneH;
-
-            for (let ring = 0; ring < 3; ring++) {
-                const ringProgress = Math.min(1, (progress - ring * 0.1) / 0.7);
-                if (ringProgress <= 0) continue;
-                const radius = (8 + ringProgress * 40) * cursorScale;
-                const alpha = (1 - ringProgress) * 0.6;
-                ctx.strokeStyle = `rgba(${ACCENT_RGB}, ${alpha})`;
-                ctx.lineWidth = 2 - ringProgress;
-                ctx.beginPath();
-                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-                ctx.stroke();
-            }
-        }
+        // Back-compat: callers that predate the model's clickEvents still get
+        // FX for any click-typed entries in the main events list.
+        const clicks = opts.clickEvents
+            ?? events.filter((e) => e.type === 'click' || e.type === 'dblclick');
+        drawClickAnimations(ctx, timeMs, clicks, sceneW, sceneH, {
+            style: clickStyle, opacity: clickOpacity, cursorScale,
+        });
     }
 
     if (showCursorHighlight) {
-        let cursorEvent = null;
-        for (let i = events.length - 1; i >= 0; i--) {
-            if (events[i].time <= timeMs) { cursorEvent = events[i]; break; }
+        // Smoothed path (when present) is spline-sampled; otherwise fall back to
+        // the raw last-event-at-or-before-time step lookup (smoothing off).
+        let cursorPos = null;
+        if (opts.cursorPath && opts.cursorPath.length) {
+            cursorPos = sampleCursorPath(timeMs, opts.cursorPath);
+        } else {
+            for (let i = events.length - 1; i >= 0; i--) {
+                if (events[i].time <= timeMs) { cursorPos = events[i]; break; }
+            }
+            if (!cursorPos && events.length) cursorPos = events[0];
         }
-        if (!cursorEvent && events.length) cursorEvent = events[0];
-        if (cursorEvent) {
-            const cx = cursorEvent.x * sceneW;
-            const cy = cursorEvent.y * sceneH;
+        if (cursorPos) {
+            const cx = cursorPos.x * sceneW;
+            const cy = cursorPos.y * sceneH;
             const r = 12 * cursorScale;
             const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
             gradient.addColorStop(0, `rgba(${ACCENT_RGB}, 1)`);

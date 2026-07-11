@@ -2,6 +2,7 @@
 import { createLogger } from '../../shared/utils/logger.js';
 import { isZoomWorthyClick } from '../../shared/utils/interaction-classifier.js';
 import { persistQualitySetting } from '../services/recording-service.js';
+import { getAllPresets } from '../../storage/indexeddb.js';
 const log = createLogger('SW');
 
 // ─── Native Bridge (inlined — MV3 service workers don't support dynamic import()) ───
@@ -127,6 +128,16 @@ function nativeBridgeConnect() {
             }
         }
 
+        // Tray "Apply Preset" click. The editor owns the actual editor state,
+        // so we persist the choice as the active default (covers "no editor
+        // open — future sessions load it") and broadcast so any open editor
+        // applies it live.
+        if (message.type === 'REQUEST_APPLY_PRESET' && message.preset_id) {
+            log.info('Native tray requested apply preset:', message.preset_id);
+            chrome.storage.local.set({ activePresetId: message.preset_id }).catch(() => {});
+            chrome.runtime.sendMessage({ type: 'PRESET_APPLIED', presetId: message.preset_id }).catch(() => {});
+        }
+
         // Call any registered type-specific listener (cursor/click ingestion, etc.)
         const handler = nativeListeners.get(message.type);
         if (handler) handler(message);
@@ -167,7 +178,25 @@ function nativeBridgeConnect() {
 
     nativeBridgeReconnectAttempts = 0;
     sendAppStateToNative();
+    sendPresetListToNative();
     return nativePort;
+}
+
+/** Pushes the current list of saved presets (id + name only) to the native
+ * tray so it can (re)build its "Apply Preset" submenu. Read directly from
+ * IndexedDB — the source of truth — so it survives SW restarts. No-op
+ * (silently) if the native app isn't connected or the DB is unavailable. */
+async function sendPresetListToNative() {
+    if (!nativePort) return;
+    try {
+        const presets = await getAllPresets();
+        nativeBridgeSend({
+            type: 'PRESET_LIST',
+            presets: presets.map((p) => ({ id: p.id, name: p.name })),
+        });
+    } catch (e) {
+        log.debug('sendPresetListToNative skipped:', e.message);
+    }
 }
 
 /** Pushes current recording/quality state to the native tray so it can pick
@@ -327,6 +356,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'REGION_CANCELLED':
             log.info('Region selection cancelled by user.');
             pendingRegionStart = null;
+            break;
+
+        // ─── Presets ───
+
+        case 'PRESETS_CHANGED':
+            // The editor/popup mutated the preset list — refresh the tray menu.
+            sendPresetListToNative();
             break;
 
         // NATIVE_MESSAGE is the SW's own broadcast of native events to the

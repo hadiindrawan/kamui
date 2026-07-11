@@ -1,6 +1,9 @@
 import React from 'react';
-import { Settings, Gauge, Scissors, Sparkles, RefreshCw } from 'lucide-react';
+import { Settings, Gauge, Scissors, Sparkles, RefreshCw, MousePointerClick, MousePointer2, Volume2 } from 'lucide-react';
 import { formatTime } from '../hooks/useEditorState.js';
+import { CLICK_ANIMATION_STYLES, CLICK_OPACITY_LEVELS } from '../utils/click-animations.js';
+import { CURSOR_SMOOTHING_LEVELS } from '../utils/cursor-smoothing.js';
+import { playClickSound, CLICK_SOUND_OPTIONS } from '../services/click-sound.js';
 
 const INTENSITIES = [
     { value: 'subtle', label: 'Subtle' },
@@ -13,6 +16,11 @@ export default function SidebarSettings({
     autoZoomIntensity, setAutoZoomIntensity, regenerateAutoZoom,
     setHasPendingEdits,
     playbackSpeed, setPlaybackSpeed,
+    cursorSmoothing, setCursorSmoothing,
+    clickAnimationStyle, setClickAnimationStyle,
+    clickAnimationOpacity, setClickAnimationOpacity,
+    clickSound, setClickSound,
+    clickAnimationInRecording, setClickAnimationInRecording,
     trimStart, trimEnd, duration, currentTime, setTrimStart, setTrimEnd,
 }) {
     return (
@@ -95,7 +103,7 @@ export default function SidebarSettings({
                         type="range"
                         className="setting-slider"
                         min="100"
-                        max="800"
+                        max="1500"
                         step="50"
                         value={transitionDuration}
                         onChange={(e) => {
@@ -125,6 +133,100 @@ export default function SidebarSettings({
                             setHasPendingEdits(true);
                         }}
                     />
+                </div>
+            </div>
+
+            <div className="sidebar-section">
+                <h3><MousePointer2 size={14} /> Cursor</h3>
+                <div className="setting-row">
+                    <div className="setting-label">
+                        <span>Movement Smoothing</span>
+                    </div>
+                    <div className="segment-mode-toggle">
+                        {CURSOR_SMOOTHING_LEVELS.map((level) => (
+                            <button
+                                key={level.value}
+                                className={`mode-btn ${cursorSmoothing === level.value ? 'active' : ''}`}
+                                onClick={() => { setCursorSmoothing(level.value); setHasPendingEdits(true); }}
+                            >
+                                {level.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="setting-info">
+                    <span>Smooths the cursor dot and follow camera. Requires Follow Cursor Mode (Framing panel).</span>
+                </div>
+            </div>
+
+            <div className="sidebar-section">
+                <h3><MousePointerClick size={14} /> Click Effects</h3>
+                <div className="setting-row">
+                    <div className="setting-label">
+                        <span>Animation Style</span>
+                    </div>
+                    <select
+                        className="setting-select"
+                        value={clickAnimationStyle}
+                        onChange={(e) => { setClickAnimationStyle(e.target.value); setHasPendingEdits(true); }}
+                    >
+                        {CLICK_ANIMATION_STYLES.map((s) => (
+                            <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div className="setting-row">
+                    <div className="setting-label">
+                        <span>Opacity</span>
+                    </div>
+                    <div className="segment-mode-toggle">
+                        {CLICK_OPACITY_LEVELS.map((level) => (
+                            <button
+                                key={level.value}
+                                className={`mode-btn ${clickAnimationOpacity === level.value ? 'active' : ''}`}
+                                onClick={() => { setClickAnimationOpacity(level.value); setHasPendingEdits(true); }}
+                            >
+                                {level.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="setting-row">
+                    <div className="setting-label">
+                        <span>Click Sound</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                        <select
+                            className="setting-select"
+                            value={clickSound}
+                            onChange={(e) => { setClickSound(e.target.value); setHasPendingEdits(true); }}
+                        >
+                            {CLICK_SOUND_OPTIONS.map((s) => (
+                                <option key={s.value} value={s.value}>{s.label}</option>
+                            ))}
+                        </select>
+                        <button
+                            className="trim-btn"
+                            onClick={() => playClickSound(clickSound)}
+                            disabled={clickSound === 'none'}
+                            title="Preview sound"
+                        >
+                            <Volume2 size={13} />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="setting-row">
+                    <label className="checkbox-label">
+                        <input
+                            type="checkbox"
+                            checked={clickAnimationInRecording}
+                            onChange={(e) => { setClickAnimationInRecording(e.target.checked); setHasPendingEdits(true); }}
+                        />
+                        <span>Include in exported video</span>
+                    </label>
                 </div>
             </div>
 
