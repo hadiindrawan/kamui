@@ -44,6 +44,10 @@
     /* Categorical tag color (e.g. "crop" segment type) — not a UI accent. */
     --info: #4c8bf5;
 
+    /* ─── Canvas overlay chrome (draggable handles over video) ─── */
+    --canvas-scrim: rgba(0, 0, 0, 0.5);
+    --canvas-overlay-border: rgba(255, 255, 255, 0.6);
+
     /* ─── Typography ─── */
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
     --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
@@ -68,6 +72,28 @@
 
     /* ─── Focus ring ─── */
     --focus-ring: 0 0 0 2px rgba(94, 105, 209, 0.5);
+
+    /* ─── Shadow ladder ─── */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.5);
+    --shadow-accent: 0 4px 16px rgba(94, 106, 210, 0.25);
+
+    /* ─── Motion ─── */
+    --transition-fast: 120ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    --transition-base: 180ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+    /* ─── Z-index scale ─── */
+    --z-canvas-overlay: 10;
+    --z-dropdown: 100;
+    --z-toast: 1000;
+    --z-modal: 1100;
+    --z-tooltip: 1200;
+
+    /* ─── Segment type colors (timeline categorical tags) ─── */
+    --seg-zoom: var(--success);
+    --seg-crop: var(--info);
+    --seg-trim: var(--warn);
 
     /* ═══ Legacy aliases (map old coral palette → Linear system) ═══ */
     --color-base: var(--bg-canvas);

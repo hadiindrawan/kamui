@@ -222,11 +222,11 @@ export default function FramingPanel({
                     </div>
                     <div className="checkbox-group">
                         <label className="checkbox-label">
-                            <input type="checkbox" checked={showShadow} onChange={(e) => setShowShadow(e.target.checked)} />
+                            <input type="checkbox" checked={showShadow} onChange={(e) => markEdited(setShowShadow)(e.target.checked)} />
                             <span>Shadow</span>
                         </label>
                         <label className="checkbox-label">
-                            <input type="checkbox" checked={showBorder} onChange={(e) => setShowBorder(e.target.checked)} />
+                            <input type="checkbox" checked={showBorder} onChange={(e) => markEdited(setShowBorder)(e.target.checked)} />
                             <span>Border</span>
                         </label>
                     </div>
@@ -250,7 +250,7 @@ export default function FramingPanel({
 
             <div className="setting-row">
                 <label className="checkbox-label">
-                    <input type="checkbox" checked={showFollowCursor} onChange={(e) => setShowFollowCursor(e.target.checked)} />
+                    <input type="checkbox" checked={showFollowCursor} onChange={(e) => markEdited(setShowFollowCursor)(e.target.checked)} />
                     <span>Follow Cursor Mode</span>
                 </label>
             </div>

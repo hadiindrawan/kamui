@@ -10,10 +10,14 @@
  * inside the camera transform, so animations track the zoomed frame).
  */
 
-// Lavender accent (matches the Linear redesign) used for cursor + click FX.
+// Lavender accent (matches the Linear redesign), still used for the separate
+// follow-cursor highlight dot in scene-renderer.js.
 export const ACCENT_RGB = '94, 105, 209';
+// Click FX use plain white instead — it reads clearly against almost any
+// recorded content, where the low-contrast lavender could get lost.
+const CLICK_RGB = '255, 255, 255';
 
-const BASE_RADIUS = 14;
+const BASE_RADIUS = 26;
 const TWO_PI = Math.PI * 2;
 
 export const CLICK_ANIMATION_STYLES = [
@@ -72,7 +76,7 @@ export function filterRapidClicks(events, minGapMs = MIN_CLICK_GAP_MS) {
 
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 
-const accent = (a) => `rgba(${ACCENT_RGB}, ${Math.max(0, Math.min(1, a))})`;
+const accent = (a) => `rgba(${CLICK_RGB}, ${Math.max(0, Math.min(1, a))})`;
 
 // --- Style renderers -------------------------------------------------------
 // Signature: (ctx, cx, cy, t, r, alpha) where t is 0..1 progress over the
@@ -108,7 +112,7 @@ function drawPress(ctx, cx, cy, t, r, alpha) {
     ctx.fill();
     // Static outer rim the disc sinks away from — sells the indent.
     ctx.strokeStyle = accent(fade * 0.5);
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(cx, cy, r * 1.15, 0, TWO_PI);
     ctx.stroke();
@@ -121,7 +125,7 @@ function drawRipple(ctx, cx, cy, t, r, alpha) {
         if (ringProgress <= 0) continue;
         const radius = (r * 0.6) + ringProgress * r * 2.8;
         ctx.strokeStyle = accent((1 - ringProgress) * 0.6 * alpha);
-        ctx.lineWidth = 2 - ringProgress;
+        ctx.lineWidth = 4 - ringProgress * 2;
         ctx.beginPath();
         ctx.arc(cx, cy, radius, 0, TWO_PI);
         ctx.stroke();
@@ -142,7 +146,7 @@ function drawGlow(ctx, cx, cy, t, r, alpha) {
     ctx.arc(cx, cy, radius, 0, TWO_PI);
     ctx.fill();
     ctx.strokeStyle = accent(fade * 0.7);
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 3;
     for (let i = 0; i < 6; i++) {
         const angle = (i / 6) * TWO_PI;
         ctx.beginPath();
@@ -161,7 +165,7 @@ function drawPulse(ctx, cx, cy, t, r, alpha) {
     ctx.arc(cx, cy, radius, 0, TWO_PI);
     ctx.fill();
     ctx.strokeStyle = accent(fade * 0.9);
-    ctx.lineWidth = 1 + 2 * (1 - t);
+    ctx.lineWidth = 2 + 3 * (1 - t);
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, TWO_PI);
     ctx.stroke();
@@ -186,7 +190,7 @@ function drawSplash(ctx, cx, cy, t, r, alpha) {
         ctx.fill();
     }
     ctx.strokeStyle = accent(fade * 0.5);
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(cx, cy, travel * 0.4 + r * 0.3, 0, TWO_PI);
     ctx.stroke();
@@ -216,6 +220,31 @@ export function drawClickAnimations(ctx, timeMs, clickEvents, sceneW, sceneH, op
     for (const event of clickEvents) {
         const elapsed = timeMs - event.time;
         if (elapsed < 0 || elapsed > duration) continue;
-        renderer(ctx, event.x * sceneW, event.y * sceneH, elapsed / duration, r, alpha);
+
+        const cx = event.x * sceneW;
+        const cy = event.y * sceneH;
+        const progress = elapsed / duration;
+
+        // Dark vignette behind the white FX so it stays readable on light or
+        // busy backgrounds, without sampling the frame's actual pixels. Drawn
+        // as its own solid-alpha gradient rather than a canvas shadow: a
+        // shadow's opacity multiplies by the *source* alpha, and most style
+        // strokes/fills are already semi-transparent (e.g. `fade * 0.5`), so
+        // a shadow stays faint no matter how far shadowColor/shadowBlur are
+        // pushed. This gradient's alpha is independent of the style, so it's
+        // reliably visible under every style and opacity level.
+        const vignetteRadius = r * 2.4 * (1 - progress * 0.3);
+        const vignetteAlpha = 0.4 * (1 - progress) * alpha;
+        if (vignetteAlpha > 0.01) {
+            const vignette = ctx.createRadialGradient(cx, cy, 0, cx, cy, vignetteRadius);
+            vignette.addColorStop(0, `rgba(0, 0, 0, ${vignetteAlpha})`);
+            vignette.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = vignette;
+            ctx.beginPath();
+            ctx.arc(cx, cy, vignetteRadius, 0, TWO_PI);
+            ctx.fill();
+        }
+
+        renderer(ctx, cx, cy, progress, r, alpha);
     }
 }

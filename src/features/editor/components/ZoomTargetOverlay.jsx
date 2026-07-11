@@ -29,7 +29,7 @@ export default function ZoomTargetOverlay({ frameRect, sceneLayout, selectedSegm
                 width: frameRect.width,
                 height: frameRect.height,
                 pointerEvents: 'none',
-                zIndex: 10,
+                zIndex: 'var(--z-canvas-overlay)',
             }}
         >
             <Rnd
@@ -48,7 +48,7 @@ export default function ZoomTargetOverlay({ frameRect, sceneLayout, selectedSegm
                 bounds="parent"
                 style={{
                     border: '2px solid var(--accent)',
-                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.5)',
+                    boxShadow: '0 0 0 9999px var(--canvas-scrim)',
                     pointerEvents: 'auto',
                     cursor: 'move',
                 }}

@@ -4,6 +4,7 @@ import {
     Plus, ZoomIn, Scissors, Trash2, RotateCcw, RotateCw,
     RefreshCw, ZoomOut, Crop, ChevronDown, Layers, X
 } from 'lucide-react';
+import { formatTime } from '../utils/time.js';
 
 const Timeline = React.memo(function Timeline({
     duration,
@@ -66,13 +67,6 @@ const Timeline = React.memo(function Timeline({
         }
         return markers;
     }, [duration, timelineZoom]);
-
-    const formatTime = (seconds) => {
-        if (!Number.isFinite(seconds)) return '00:00';
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    };
 
     const getPositionPercent = useCallback((time) => {
         if (!duration || duration <= 0) return 0;
@@ -241,12 +235,18 @@ const Timeline = React.memo(function Timeline({
                     </button>
                 </div>
 
+                <div className="timeline-legend" title="Segment colors on the tracks below">
+                    <span className="legend-item"><span className="legend-swatch legend-swatch-zoom" /> Zoom segment</span>
+                    <span className="legend-item"><span className="legend-swatch legend-swatch-crop" /> Crop segment</span>
+                    <span className="legend-item"><span className="legend-swatch legend-swatch-trim" /> Trimmed region</span>
+                </div>
+
                 <div className="toolbar-right">
                     <div className="zoom-control">
                         <button
                             className="zoom-btn"
                             onClick={() => setTimelineZoom(Math.max(0.5, timelineZoom - 0.5))}
-                            title="Zoom out timeline"
+                            title="Zoom out timeline (or Ctrl+scroll)"
                         >
                             <ZoomOut size={14} />
                         </button>
@@ -258,13 +258,13 @@ const Timeline = React.memo(function Timeline({
                             value={timelineZoom}
                             onChange={(e) => setTimelineZoom(parseFloat(e.target.value))}
                             className="zoom-slider"
-                            title="Timeline zoom"
+                            title="Timeline zoom (or Ctrl+scroll)"
                         />
                         <span className="zoom-label">{timelineZoom.toFixed(1)}x</span>
                         <button
                             className="zoom-btn"
                             onClick={() => setTimelineZoom(Math.min(4, timelineZoom + 0.5))}
-                            title="Zoom in timeline"
+                            title="Zoom in timeline (or Ctrl+scroll)"
                         >
                             <ZoomIn size={14} />
                         </button>

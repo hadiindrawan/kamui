@@ -4,6 +4,7 @@ import { formatTime } from '../hooks/useEditorState.js';
 import { CLICK_ANIMATION_STYLES, CLICK_OPACITY_LEVELS } from '../utils/click-animations.js';
 import { CURSOR_SMOOTHING_LEVELS } from '../utils/cursor-smoothing.js';
 import { playClickSound, CLICK_SOUND_OPTIONS } from '../services/click-sound.js';
+import Button from '../../../shared/components/Button.jsx';
 
 const INTENSITIES = [
     { value: 'subtle', label: 'Subtle' },
@@ -22,6 +23,7 @@ export default function SidebarSettings({
     clickSound, setClickSound,
     clickAnimationInRecording, setClickAnimationInRecording,
     trimStart, trimEnd, duration, currentTime, setTrimStart, setTrimEnd,
+    onJumpToFrame, showFollowCursor, onOpenShortcuts,
 }) {
     return (
         <>
@@ -65,14 +67,15 @@ export default function SidebarSettings({
                             </button>
                         ))}
                     </div>
-                    <button
-                        className="trim-btn"
-                        style={{ marginTop: '8px', width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                    <Button
+                        variant="secondary"
+                        className="regenerate-autozoom-btn"
                         onClick={regenerateAutoZoom}
                         title="Rebuild auto-zoom sessions from your recording (keeps manual segments)"
+                        icon={<RefreshCw size={13} />}
                     >
-                        <RefreshCw size={13} /> Regenerate Auto-Zoom
-                    </button>
+                        Regenerate Auto-Zoom
+                    </Button>
                 </div>
 
                 <div className="setting-row">
@@ -155,7 +158,16 @@ export default function SidebarSettings({
                     </div>
                 </div>
                 <div className="setting-info">
-                    <span>Smooths the cursor dot and follow camera. Requires Follow Cursor Mode (Framing panel).</span>
+                    {showFollowCursor ? (
+                        <span>Smooths the cursor dot and follow camera.</span>
+                    ) : (
+                        <span>
+                            Smooths the cursor dot and follow camera. Requires Follow Cursor Mode —{' '}
+                            <button type="button" className="inline-link-btn" onClick={onJumpToFrame}>
+                                enable it in the Frame tab
+                            </button>.
+                        </span>
+                    )}
                 </div>
             </div>
 
@@ -197,7 +209,7 @@ export default function SidebarSettings({
                     <div className="setting-label">
                         <span>Click Sound</span>
                     </div>
-                    <div style={{ display: 'flex', gap: '6px' }}>
+                    <div className="setting-row-inline">
                         <select
                             className="setting-select"
                             value={clickSound}
@@ -207,14 +219,15 @@ export default function SidebarSettings({
                                 <option key={s.value} value={s.value}>{s.label}</option>
                             ))}
                         </select>
-                        <button
-                            className="trim-btn"
+                        <Button
+                            variant="secondary"
+                            iconOnly
                             onClick={() => playClickSound(clickSound)}
                             disabled={clickSound === 'none'}
                             title="Preview sound"
-                        >
-                            <Volume2 size={13} />
-                        </button>
+                            aria-label="Preview sound"
+                            icon={<Volume2 size={13} />}
+                        />
                     </div>
                 </div>
 
@@ -248,12 +261,9 @@ export default function SidebarSettings({
                         </button>
                     </div>
                 </div>
-                <div className="keyboard-hints">
-                    <span><kbd>Space</kbd> Play</span>
-                    <span><kbd>I</kbd> In</span>
-                    <span><kbd>O</kbd> Out</span>
-                    <span><kbd>Ctrl+Z</kbd> Undo</span>
-                </div>
+                <button type="button" className="inline-link-btn shortcuts-link" onClick={onOpenShortcuts}>
+                    View all shortcuts (?)
+                </button>
             </div>
         </>
     );

@@ -1,0 +1,114 @@
+.ui-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	font-family: var(--font-sans);
+	font-weight: 500;
+	cursor: pointer;
+	transition: background var(--transition-fast), border-color var(--transition-fast),
+		transform var(--transition-fast), box-shadow var(--transition-fast), color var(--transition-fast);
+	white-space: nowrap;
+}
+
+.ui-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+	transform: none !important;
+	box-shadow: none !important;
+}
+
+.ui-btn:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+}
+
+/* ─── Sizes ─── */
+.ui-btn-sm {
+	height: 24px;
+	padding: 0 8px;
+	font-size: 11px;
+}
+
+.ui-btn-sm.ui-btn-icon-only {
+	width: 24px;
+	padding: 0;
+}
+
+.ui-btn-md {
+	height: 32px;
+	padding: 0 14px;
+	font-size: 12px;
+}
+
+.ui-btn-md.ui-btn-icon-only {
+	width: 32px;
+	padding: 0;
+}
+
+/* ─── Variants ─── */
+.ui-btn-secondary {
+	background: var(--surface-2);
+	border-color: var(--hairline);
+	color: var(--ink);
+}
+
+.ui-btn-secondary:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: var(--accent);
+	transform: translateY(-1px);
+	box-shadow: var(--shadow-sm);
+}
+
+.ui-btn-primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--on-accent);
+}
+
+.ui-btn-primary:hover:not(:disabled) {
+	background: var(--accent-hover);
+	border-color: var(--accent-hover);
+	transform: translateY(-1px);
+	box-shadow: var(--shadow-accent);
+}
+
+.ui-btn-ghost {
+	background: transparent;
+	border-color: transparent;
+	color: var(--ink-subtle);
+}
+
+.ui-btn-ghost:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.06);
+	color: var(--ink);
+}
+
+.ui-btn-danger {
+	background: var(--danger);
+	border-color: var(--danger);
+	color: var(--on-accent);
+}
+
+.ui-btn-danger:hover:not(:disabled) {
+	background: var(--danger-hover);
+	border-color: var(--danger-hover);
+	transform: translateY(-1px);
+	box-shadow: 0 4px 16px rgba(229, 72, 77, 0.3);
+}
+
+/* ─── Active/pressed state (toggles like loop, mute) ─── */
+.ui-btn-active.ui-btn-secondary,
+.ui-btn-active.ui-btn-ghost {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--on-accent);
+}
+
+.ui-btn-active.ui-btn-secondary:hover:not(:disabled),
+.ui-btn-active.ui-btn-ghost:hover:not(:disabled) {
+	background: var(--accent-hover);
+	border-color: var(--accent-hover);
+}

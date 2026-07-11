@@ -13,6 +13,7 @@ import {
 function makeCtxSpy() {
     let drawOps = 0;
     const ctx = {
+        save() {}, restore() {},
         beginPath() {}, moveTo() {}, lineTo() {},
         arc() { drawOps++; },
         fill() {}, stroke() {},
@@ -20,6 +21,8 @@ function makeCtxSpy() {
         set fillStyle(_) {}, get fillStyle() { return ''; },
         set strokeStyle(_) {}, get strokeStyle() { return ''; },
         set lineWidth(_) {}, get lineWidth() { return 0; },
+        set shadowColor(_) {}, get shadowColor() { return ''; },
+        set shadowBlur(_) {}, get shadowBlur() { return 0; },
     };
     return { ctx, drawCount: () => drawOps };
 }

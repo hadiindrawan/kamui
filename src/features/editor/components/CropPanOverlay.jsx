@@ -38,7 +38,7 @@ export default function CropPanOverlay({ frameRect, videoRect, onUpdatePan }) {
                 height: frameRect.height,
                 overflow: 'hidden',
                 pointerEvents: 'none',
-                zIndex: 10,
+                zIndex: 'var(--z-canvas-overlay)',
             }}
         >
             <Rnd
@@ -54,7 +54,7 @@ export default function CropPanOverlay({ frameRect, videoRect, onUpdatePan }) {
                     onUpdatePan(normX, normY);
                 }}
                 style={{
-                    border: '2px dashed rgba(255, 255, 255, 0.6)',
+                    border: '2px dashed var(--canvas-overlay-border)',
                     pointerEvents: 'auto',
                     cursor: 'move',
                 }}

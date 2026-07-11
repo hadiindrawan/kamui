@@ -1,13 +1,14 @@
 import React from 'react';
 import { MousePointer2, Lock, Repeat, Trash2, ZoomIn, Crop } from 'lucide-react';
 import { formatTime } from '../hooks/useEditorState.js';
+import Button from '../../../shared/components/Button.jsx';
 
 const TYPE_LABELS = {
     zoom: 'Zoom', crop: 'Crop', typing: 'Typing', selection: 'Selection', dblclick: 'Double Click', click: 'Click',
 };
 
 export default function SegmentInspector({
-    segment, segments, updateSegment, saveHistory, tracks = [], onDeleteSegment,
+    segment, segments, updateSegment, saveHistory, tracks = [], onDeleteSegment, onClose,
 }) {
     if (!segment) return null;
     const isCrop = segment.type === 'crop';
@@ -21,7 +22,14 @@ export default function SegmentInspector({
 
     return (
         <div className="sidebar-section">
-            <h3>{isCrop ? <Crop size={14} /> : <ZoomIn size={14} />} {label} Segment</h3>
+            <div className="segment-inspector-header">
+                <span className={`segment-type-badge ${isCrop ? 'segment-type-crop' : 'segment-type-zoom'}`}>
+                    {isCrop ? <Crop size={14} /> : <ZoomIn size={14} />} {label} Segment
+                </span>
+                <Button variant="ghost" size="sm" onClick={onClose} title="Done editing this segment">
+                    Done
+                </Button>
+            </div>
 
             <div className="setting-row">
                 <div className="setting-label"><span>Track</span></div>
@@ -160,14 +168,15 @@ export default function SegmentInspector({
                 </div>
             </div>
 
-            <button
-                className="trim-btn"
-                style={{ marginTop: '8px', width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            <Button
+                variant="danger"
+                className="segment-delete-btn"
                 onClick={onDeleteSegment}
                 title="Delete segment (Delete/Backspace)"
+                icon={<Trash2 size={13} />}
             >
-                <Trash2 size={13} /> Delete Segment
-            </button>
+                Delete Segment
+            </Button>
         </div>
     );
 }

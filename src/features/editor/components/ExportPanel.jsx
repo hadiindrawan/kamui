@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Download, Repeat, AlertTriangle } from 'lucide-react';
 import { calculateCanvasSize } from '../utils/coordinates.js';
 import { selectExportCodec, computeAudioBitrate, estimateFileSizeBytes, CODEC_LABELS } from '../utils/export-codec.js';
+import Tooltip from '../../../shared/components/Tooltip.jsx';
 
 // Explicit stops (not a raw min/step range) so every value, including the
 // endpoints, is exactly reachable regardless of interaction method - a plain
@@ -77,29 +78,39 @@ export default function ExportPanel({
     return (
         <footer className="editor-controls">
             <div className="playback-controls">
-                <button className="btn-control btn-small" onClick={() => onSkip(-5)}>
-                    <SkipBack size={18} />
-                </button>
-                <button className="btn-control btn-play" onClick={onPlayPause}>
-                    {isPlaying ? <Pause size={22} /> : <Play size={22} />}
-                </button>
-                <button className="btn-control btn-small" onClick={() => onSkip(5)}>
-                    <SkipForward size={18} />
-                </button>
-                <button
-                    className={`btn-control btn-small ${loopPlayback ? 'active' : ''}`}
-                    onClick={() => setLoopPlayback(!loopPlayback)}
-                    title={loopPlayback ? 'Disable loop' : 'Loop playback'}
-                >
-                    <Repeat size={18} />
-                </button>
-                <button
-                    className="btn-control btn-small"
-                    onClick={() => setIsMuted(!isMuted)}
-                    title={isMuted ? 'Unmute' : 'Mute'}
-                >
-                    {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-                </button>
+                <Tooltip content="Back 5s" shortcut="←">
+                    <button className="btn-control btn-small" onClick={() => onSkip(-5)} aria-label="Back 5 seconds">
+                        <SkipBack size={18} />
+                    </button>
+                </Tooltip>
+                <Tooltip content={isPlaying ? 'Pause' : 'Play'} shortcut="Space">
+                    <button className="btn-control btn-play" onClick={onPlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
+                        {isPlaying ? <Pause size={22} /> : <Play size={22} />}
+                    </button>
+                </Tooltip>
+                <Tooltip content="Forward 5s" shortcut="→">
+                    <button className="btn-control btn-small" onClick={() => onSkip(5)} aria-label="Forward 5 seconds">
+                        <SkipForward size={18} />
+                    </button>
+                </Tooltip>
+                <Tooltip content={loopPlayback ? 'Disable loop' : 'Loop playback'}>
+                    <button
+                        className={`btn-control btn-small ${loopPlayback ? 'active' : ''}`}
+                        onClick={() => setLoopPlayback(!loopPlayback)}
+                        aria-label={loopPlayback ? 'Disable loop' : 'Loop playback'}
+                    >
+                        <Repeat size={18} />
+                    </button>
+                </Tooltip>
+                <Tooltip content={isMuted ? 'Unmute' : 'Mute'}>
+                    <button
+                        className="btn-control btn-small"
+                        onClick={() => setIsMuted(!isMuted)}
+                        aria-label={isMuted ? 'Unmute' : 'Mute'}
+                    >
+                        {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                    </button>
+                </Tooltip>
                 <div className="volume-slider-group" title="Volume">
                     <input
                         type="range"

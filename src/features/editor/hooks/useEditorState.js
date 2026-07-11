@@ -4,6 +4,7 @@ import { generateAutoZoomSegments, resolveIntensity } from '../utils/auto-zoom.j
 import { capturePresetSettings, applyPresetSettings } from '../utils/preset-fields.js';
 import { DEFAULT_CURSOR_SMOOTHING } from '../utils/cursor-smoothing.js';
 import { useToast } from '../../../shared/hooks/useToast.js';
+import { formatTime as formatTimeWithPrecision } from '../utils/time.js';
 
 export const INTERACTION_TYPES = new Set(['click', 'dblclick', 'typing', 'selection']);
 const MIN_SEGMENT_DISTANCE_MS = 1000;
@@ -95,11 +96,7 @@ export function resolvePlaybackAction(time, { segments, selectedSegmentId, trimS
 }
 
 export function formatTime(seconds) {
-    if (!Number.isFinite(seconds)) return '00:00.00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+    return formatTimeWithPrecision(seconds, { centiseconds: true });
 }
 
 /**
@@ -158,6 +155,7 @@ export function useEditorState() {
 
     const [trimStart, setTrimStart] = useState(0);
     const [trimEnd, setTrimEnd] = useState(0);
+    const [confirmResetOpen, setConfirmResetOpen] = useState(false);
 
     const [segments, setSegments] = useState([]);
     const [tracks, setTracks] = useState([{ id: 0, label: 'Track 1' }]);
@@ -169,6 +167,7 @@ export function useEditorState() {
     const [hasPendingEdits, setHasPendingEdits] = useState(false);
     const [savedSegments, setSavedSegments] = useState([]);
     const [selectedSegmentId, setSelectedSegmentId] = useState(null);
+    const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
     const canvasPlayerRef = useRef(null);
     const canvasContainerRef = useRef(null);
@@ -291,11 +290,11 @@ export function useEditorState() {
         if (!file) return;
 
         if (!file.type.startsWith('video/')) {
-            alert('Please upload a valid video file (.webm, .mp4, .mov).');
+            showToast({ type: 'error', message: 'Please upload a valid video file (.webm, .mp4, .mov).' });
             return;
         }
         if (file.size > 2 * 1024 * 1024 * 1024) {
-            alert('File is too large. Please upload a file smaller than 2GB.');
+            showToast({ type: 'error', message: 'File is too large. Please upload a file smaller than 2GB.' });
             return;
         }
 
@@ -321,7 +320,7 @@ export function useEditorState() {
             setError('Upload failed: ' + err.message);
             setLoading(false);
         }
-    }, []);
+    }, [showToast]);
 
     const handlePlayPause = useCallback(() => setIsPlaying((prev) => !prev), []);
 
@@ -404,11 +403,11 @@ export function useEditorState() {
 
     const removeTrack = useCallback((trackId) => {
         if (segments.some((seg) => (seg.trackId ?? 0) === trackId)) {
-            alert('Move or delete the segments on this track before removing it.');
+            showToast({ type: 'error', message: 'Move or delete the segments on this track before removing it.' });
             return;
         }
         setTracks((prev) => (prev.length > 1 ? prev.filter((t) => t.id !== trackId) : prev));
-    }, [segments]);
+    }, [segments, showToast]);
 
     // Selecting a segment jumps the playhead to its start and pauses, so the
     // user immediately sees/hears the moment the segment governs. Deselecting
@@ -452,12 +451,10 @@ export function useEditorState() {
         }
     }, [segments, selectedSegmentId, saveHistory]);
 
-    const resetTimeline = useCallback(() => {
-        const confirmed = window.confirm(
-            'Reset timeline to original? This will restore all auto-detected zoom segments and remove manual edits.'
-        );
-        if (!confirmed) return;
+    const requestResetTimeline = useCallback(() => setConfirmResetOpen(true), []);
 
+    const performResetTimeline = useCallback(() => {
+        setConfirmResetOpen(false);
         if (recording?.events) {
             const initialSegments = buildAutoZoomSegments(recording.events);
             setSegments(initialSegments);
@@ -524,6 +521,16 @@ export function useEditorState() {
     const handleTrimChange = useCallback((start, end) => {
         setTrimStart(start);
         setTrimEnd(end);
+        setHasPendingEdits(true);
+    }, []);
+
+    const markTrimStart = useCallback((time) => {
+        setTrimStart(time);
+        setHasPendingEdits(true);
+    }, []);
+
+    const markTrimEnd = useCallback((time) => {
+        setTrimEnd(time);
         setHasPendingEdits(true);
     }, []);
 
@@ -594,10 +601,10 @@ export function useEditorState() {
                     handleSkip(e.shiftKey ? 10 : 5);
                     break;
                 case 'KeyI':
-                    setTrimStart(currentTime);
+                    markTrimStart(currentTime);
                     break;
                 case 'KeyO':
-                    setTrimEnd(currentTime);
+                    markTrimEnd(currentTime);
                     break;
                 case 'KeyZ':
                     if (e.ctrlKey || e.metaKey) {
@@ -624,12 +631,18 @@ export function useEditorState() {
                         handleSaveChanges();
                     }
                     break;
+                case 'Slash':
+                    if (e.shiftKey) {
+                        e.preventDefault();
+                        setShortcutsOpen((prev) => !prev);
+                    }
+                    break;
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [currentTime, handleUndo, handleRedo, deleteSegment, selectedSegmentId, handleSaveChanges, handleSkip]);
+    }, [currentTime, handleUndo, handleRedo, deleteSegment, selectedSegmentId, handleSaveChanges, handleSkip, markTrimStart, markTrimEnd]);
 
     // Smooth timeline playhead: CanvasPlayer reports a frame-accurate global
     // time every rAF frame; we move the playhead DOM node's `left` directly (no
@@ -769,14 +782,16 @@ export function useEditorState() {
         clickAnimationStyle, setClickAnimationStyle, clickAnimationOpacity, setClickAnimationOpacity,
         clickSound, setClickSound, clickAnimationInRecording, setClickAnimationInRecording,
         // trim
-        trimStart, setTrimStart, trimEnd, setTrimEnd, handleTrimChange,
+        trimStart, setTrimStart, trimEnd, setTrimEnd, handleTrimChange, markTrimStart, markTrimEnd,
         // segments + history
         segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
-        resetTimeline, handleUndo, handleRedo, saveHistory,
+        requestResetTimeline, performResetTimeline, confirmResetOpen, setConfirmResetOpen, handleUndo, handleRedo, saveHistory,
         // tracks + loop
         tracks, addTrack, removeTrack, loopPlayback, setLoopPlayback,
         // pending edits
         hasPendingEdits, setHasPendingEdits, savedSegments, handleSaveChanges,
+        // shortcuts help
+        shortcutsOpen, setShortcutsOpen,
         // export
         isExporting, exportProgress, exportResolution, setExportResolution, exportFps, setExportFps,
         exportFormat, setExportFormat, conversionService, setConversionService,

@@ -49,12 +49,23 @@ describe('Editor', () => {
 
     it('should load recording and render the editor when id is provided', async () => {
         render(<Editor />);
-        
+
         // Wait for the loading state to finish
         await waitFor(() => {
             expect(screen.getByText('Beunta Editor')).toBeInTheDocument();
             expect(screen.getByTestId('mock-canvas-player')).toBeInTheDocument();
             expect(screen.getByTestId('mock-timeline')).toBeInTheDocument();
         });
+    });
+
+    it('should surface the Save Changes button after using the trim "Set" shortcut buttons', async () => {
+        render(<Editor />);
+        await waitFor(() => expect(screen.getByText('Beunta Editor')).toBeInTheDocument());
+
+        expect(screen.queryByTitle('Save timeline edits (Cmd+s)')).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByTitle('Set to current time (I)'));
+
+        expect(screen.getByTitle('Save timeline edits (Cmd+s)')).toBeInTheDocument();
     });
 });

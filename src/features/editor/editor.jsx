@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Film, HardDrive } from 'lucide-react';
+import { Film, HardDrive, Settings, ZoomIn, Crop, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import CanvasPlayer from './components/CanvasPlayer.jsx';
 import Timeline from './components/Timeline.jsx';
 import EditorToolbar from './components/EditorToolbar.jsx';
@@ -12,10 +12,16 @@ import ZoomTargetOverlay from './components/ZoomTargetOverlay.jsx';
 import CropPanOverlay from './components/CropPanOverlay.jsx';
 import PresetManagerModal from './components/PresetManagerModal.jsx';
 import AutoExportCountdown from './components/AutoExportCountdown.jsx';
+import ShortcutsModal from './components/ShortcutsModal.jsx';
 import { useEditorState } from './hooks/useEditorState.js';
 import { usePresets } from './hooks/usePresets.js';
 import { ToastProvider } from '../../shared/components/Toast.jsx';
+import ConfirmDialog from '../../shared/components/ConfirmDialog.jsx';
+import Tabs from '../../shared/components/Tabs.jsx';
+import Button from '../../shared/components/Button.jsx';
 import './editor.css';
+
+const SIDEBAR_COLLAPSED_KEY = 'beunta.sidebarCollapsed';
 
 export default function Editor() {
     return (
@@ -45,11 +51,13 @@ function EditorContent() {
         cursorSmoothing, setCursorSmoothing,
         clickAnimationStyle, setClickAnimationStyle, clickAnimationOpacity, setClickAnimationOpacity,
         clickSound, setClickSound, clickAnimationInRecording, setClickAnimationInRecording,
-        trimStart, trimEnd, setTrimStart, setTrimEnd,
+        trimStart, trimEnd, markTrimStart, markTrimEnd,
         segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
-        resetTimeline, handleUndo, handleRedo, saveHistory, handleTrimChange,
+        requestResetTimeline, performResetTimeline, confirmResetOpen, setConfirmResetOpen,
+        handleUndo, handleRedo, saveHistory, handleTrimChange,
         tracks, addTrack, removeTrack,
         hasPendingEdits, setHasPendingEdits, handleSaveChanges,
+        shortcutsOpen, setShortcutsOpen,
         isExporting, exportProgress, exportResolution, setExportResolution, exportFps, setExportFps,
         exportFormat, setExportFormat, conversionService, setConversionService,
         exportQuality, setExportQuality, handleExport,
@@ -66,6 +74,58 @@ function EditorContent() {
     const frameRect = showCropOverlay ? getFrameRect() : null;
     const zoomFrameRect = showZoomOverlay ? getVisibleVideoRect() : null;
     const zoomSceneLayout = showZoomOverlay ? getSceneLayout() : null;
+
+    const [sidebarTab, setSidebarTab] = useState('video');
+    const previousSidebarTabRef = useRef('video');
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+        try {
+            return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+        } catch {
+            return false;
+        }
+    });
+
+    useEffect(() => {
+        if (selectedSegmentId) {
+            setSidebarTab((prev) => {
+                if (prev !== 'segment') previousSidebarTabRef.current = prev;
+                return 'segment';
+            });
+            setSidebarCollapsed(false);
+        } else {
+            setSidebarTab((prev) => (prev === 'segment' ? previousSidebarTabRef.current : prev));
+        }
+    }, [selectedSegmentId]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+        } catch {
+            // Storage unavailable (private mode, etc.) — collapse state just won't persist.
+        }
+    }, [sidebarCollapsed]);
+
+    // Auto-collapse on narrow viewports so the canvas/timeline stay usable;
+    // doesn't fight a manual expand afterward (matches the footer-wrap
+    // breakpoint in editor.css).
+    useEffect(() => {
+        if (typeof window.matchMedia !== 'function') return;
+        const mq = window.matchMedia('(max-width: 1100px)');
+        if (mq.matches) setSidebarCollapsed(true);
+        const handleChange = (e) => { if (e.matches) setSidebarCollapsed(true); };
+        mq.addEventListener('change', handleChange);
+        return () => mq.removeEventListener('change', handleChange);
+    }, []);
+
+    const sidebarTabs = [
+        ...(selectedSegment ? [{
+            id: 'segment',
+            label: 'Segment',
+            icon: selectedSegment.type === 'crop' ? <Crop size={14} /> : <ZoomIn size={14} />,
+        }] : []),
+        { id: 'video', label: 'Video', icon: <Settings size={14} /> },
+        { id: 'frame', label: 'Frame', icon: <Film size={14} /> },
+    ];
 
     const urlParams = new URLSearchParams(window.location.search);
     const hasRecordingId = !!urlParams.get('id');
@@ -102,7 +162,7 @@ function EditorContent() {
                             onChange={handleFileUpload}
                             style={{ display: 'none' }}
                         />
-                        <label htmlFor="file-upload" className="btn btn-primary" style={{ marginTop: '20px', cursor: 'pointer', display: 'inline-flex', padding: '10px 20px', background: 'var(--accent)', color: 'var(--on-accent)', borderRadius: '8px' }}>
+                        <label htmlFor="file-upload" className="upload-select-btn">
                             Select File
                         </label>
                     </div>
@@ -133,7 +193,10 @@ function EditorContent() {
                 activePresetId={presets.activePresetId}
                 onApplyPreset={presets.applyPreset}
                 onOpenPresetManager={presets.openManager}
+                onOpenShortcuts={() => setShortcutsOpen(true)}
             />
+
+            <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
             <AutoExportCountdown countdown={presets.countdown} onCancel={presets.cancelCountdown} />
 
@@ -152,6 +215,16 @@ function EditorContent() {
                 onSetPresetAutoExport={presets.setPresetAutoExport}
                 onDeletePreset={presets.deletePresetById}
                 onClearActive={() => presets.setActivePreset(null)}
+            />
+
+            <ConfirmDialog
+                open={confirmResetOpen}
+                title="Reset timeline?"
+                message="This will restore all auto-detected zoom segments and remove manual edits."
+                confirmLabel="Reset"
+                danger
+                onConfirm={performResetTimeline}
+                onCancel={() => setConfirmResetOpen(false)}
             />
 
             <main className="editor-main">
@@ -214,75 +287,102 @@ function EditorContent() {
                     </div>
                 </div>
 
-                <aside className="sidebar">
-                    {selectedSegment ? (
-                        <SegmentInspector
-                            segment={selectedSegment}
-                            segments={segments}
-                            updateSegment={updateSegment}
-                            saveHistory={saveHistory}
-                            tracks={tracks}
-                            onDeleteSegment={deleteSegment}
+                <aside className={`sidebar ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+                    <div className="sidebar-tab-bar">
+                        {!sidebarCollapsed && (
+                            <Tabs tabs={sidebarTabs} activeId={sidebarTab} onChange={setSidebarTab} />
+                        )}
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            iconOnly
+                            className="sidebar-collapse-btn"
+                            onClick={() => setSidebarCollapsed((prev) => !prev)}
+                            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                            icon={sidebarCollapsed ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}
                         />
-                    ) : (
-                        <SidebarSettings
-                            zoomLevel={zoomLevel}
-                            setZoomLevel={setZoomLevel}
-                            zoomDuration={zoomDuration}
-                            setZoomDuration={setZoomDuration}
-                            transitionDuration={transitionDuration}
-                            setTransitionDuration={setTransitionDuration}
-                            autoZoomIntensity={autoZoomIntensity}
-                            setAutoZoomIntensity={setAutoZoomIntensity}
-                            regenerateAutoZoom={regenerateAutoZoom}
-                            setHasPendingEdits={setHasPendingEdits}
-                            playbackSpeed={playbackSpeed}
-                            setPlaybackSpeed={setPlaybackSpeed}
-                            cursorSmoothing={cursorSmoothing}
-                            setCursorSmoothing={setCursorSmoothing}
-                            clickAnimationStyle={clickAnimationStyle}
-                            setClickAnimationStyle={setClickAnimationStyle}
-                            clickAnimationOpacity={clickAnimationOpacity}
-                            setClickAnimationOpacity={setClickAnimationOpacity}
-                            clickSound={clickSound}
-                            setClickSound={setClickSound}
-                            clickAnimationInRecording={clickAnimationInRecording}
-                            setClickAnimationInRecording={setClickAnimationInRecording}
-                            trimStart={trimStart}
-                            trimEnd={trimEnd}
-                            duration={duration}
-                            currentTime={currentTime}
-                            setTrimStart={setTrimStart}
-                            setTrimEnd={setTrimEnd}
-                        />
+                    </div>
+
+                    {!sidebarCollapsed && (
+                        <div className="sidebar-content">
+                            {sidebarTab === 'segment' && selectedSegment && (
+                                <SegmentInspector
+                                    segment={selectedSegment}
+                                    segments={segments}
+                                    updateSegment={updateSegment}
+                                    saveHistory={saveHistory}
+                                    tracks={tracks}
+                                    onDeleteSegment={deleteSegment}
+                                    onClose={() => selectSegment(null)}
+                                />
+                            )}
+                            {sidebarTab === 'video' && (
+                                <SidebarSettings
+                                    zoomLevel={zoomLevel}
+                                    setZoomLevel={setZoomLevel}
+                                    zoomDuration={zoomDuration}
+                                    setZoomDuration={setZoomDuration}
+                                    transitionDuration={transitionDuration}
+                                    setTransitionDuration={setTransitionDuration}
+                                    autoZoomIntensity={autoZoomIntensity}
+                                    setAutoZoomIntensity={setAutoZoomIntensity}
+                                    regenerateAutoZoom={regenerateAutoZoom}
+                                    setHasPendingEdits={setHasPendingEdits}
+                                    playbackSpeed={playbackSpeed}
+                                    setPlaybackSpeed={setPlaybackSpeed}
+                                    cursorSmoothing={cursorSmoothing}
+                                    setCursorSmoothing={setCursorSmoothing}
+                                    clickAnimationStyle={clickAnimationStyle}
+                                    setClickAnimationStyle={setClickAnimationStyle}
+                                    clickAnimationOpacity={clickAnimationOpacity}
+                                    setClickAnimationOpacity={setClickAnimationOpacity}
+                                    clickSound={clickSound}
+                                    setClickSound={setClickSound}
+                                    clickAnimationInRecording={clickAnimationInRecording}
+                                    setClickAnimationInRecording={setClickAnimationInRecording}
+                                    trimStart={trimStart}
+                                    trimEnd={trimEnd}
+                                    duration={duration}
+                                    currentTime={currentTime}
+                                    setTrimStart={markTrimStart}
+                                    setTrimEnd={markTrimEnd}
+                                    onJumpToFrame={() => setSidebarTab('frame')}
+                                    showFollowCursor={showFollowCursor}
+                                    onOpenShortcuts={() => setShortcutsOpen(true)}
+                                />
+                            )}
+                            {sidebarTab === 'frame' && (
+                                <FramingPanel
+                                    aspectRatio={aspectRatio}
+                                    setAspectRatio={setAspectRatio}
+                                    backgroundMode={backgroundMode}
+                                    setBackgroundMode={setBackgroundMode}
+                                    backgroundColor={backgroundColor}
+                                    setBackgroundColor={setBackgroundColor}
+                                    backgroundValue={backgroundValue}
+                                    setBackgroundValue={setBackgroundValue}
+                                    backgroundBlur={backgroundBlur}
+                                    setBackgroundBlur={setBackgroundBlur}
+                                    cropToFill={cropToFill}
+                                    setCropToFill={setCropToFill}
+                                    cropZoom={cropZoom}
+                                    setCropZoom={setCropZoom}
+                                    insetPadding={insetPadding}
+                                    setInsetPadding={setInsetPadding}
+                                    showShadow={showShadow}
+                                    setShowShadow={setShowShadow}
+                                    showBorder={showBorder}
+                                    setShowBorder={setShowBorder}
+                                    borderRadius={borderRadius}
+                                    setBorderRadius={setBorderRadius}
+                                    showFollowCursor={showFollowCursor}
+                                    setShowFollowCursor={setShowFollowCursor}
+                                    setHasPendingEdits={setHasPendingEdits}
+                                />
+                            )}
+                        </div>
                     )}
-                    <FramingPanel
-                        aspectRatio={aspectRatio}
-                        setAspectRatio={setAspectRatio}
-                        backgroundMode={backgroundMode}
-                        setBackgroundMode={setBackgroundMode}
-                        backgroundColor={backgroundColor}
-                        setBackgroundColor={setBackgroundColor}
-                        backgroundValue={backgroundValue}
-                        setBackgroundValue={setBackgroundValue}
-                        backgroundBlur={backgroundBlur}
-                        setBackgroundBlur={setBackgroundBlur}
-                        cropToFill={cropToFill}
-                        setCropToFill={setCropToFill}
-                        cropZoom={cropZoom}
-                        setCropZoom={setCropZoom}
-                        insetPadding={insetPadding}
-                        setInsetPadding={setInsetPadding}
-                        showShadow={showShadow}
-                        setShowShadow={setShowShadow}
-                        showBorder={showBorder}
-                        setShowBorder={setShowBorder}
-                        borderRadius={borderRadius}
-                        setBorderRadius={setBorderRadius}
-                        showFollowCursor={showFollowCursor}
-                        setShowFollowCursor={setShowFollowCursor}
-                        setHasPendingEdits={setHasPendingEdits}
-                    />
                 </aside>
             </main>
 
@@ -303,7 +403,7 @@ function EditorContent() {
                     onUpdateSegment={updateSegment}
                     onSelectSegment={selectSegment}
                     onDeleteSegment={deleteSegment}
-                    onResetTimeline={resetTimeline}
+                    onResetTimeline={requestResetTimeline}
                     onTrimChange={handleTrimChange}
                     onUndo={handleUndo}
                     onRedo={handleRedo}

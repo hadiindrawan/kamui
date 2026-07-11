@@ -5,9 +5,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1100;
+    z-index: var(--z-modal);
     padding: var(--space-lg);
-    animation: modal-fade 0.15s ease-out;
+    animation: modal-fade var(--transition-base) ease-out;
 }
 
 .modal-panel {
@@ -15,11 +15,11 @@
     background: var(--surface-2);
     border: 1px solid var(--hairline);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
     max-height: 85vh;
-    animation: modal-rise 0.18s ease-out;
+    animation: modal-rise var(--transition-base) ease-out;
 }
 
 .modal-header {

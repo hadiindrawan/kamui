@@ -1,11 +1,13 @@
 import React from 'react';
-import { Film, Play, Zap, HardDrive } from 'lucide-react';
+import { Film, Play, Zap, HardDrive, Keyboard } from 'lucide-react';
 import { formatTime } from '../hooks/useEditorState.js';
 import PresetSelector from './PresetSelector.jsx';
+import Button from '../../../shared/components/Button.jsx';
+import Tooltip from '../../../shared/components/Tooltip.jsx';
 
 export default function EditorToolbar({
     segmentCount, recordingSizeBytes, hasPendingEdits, onSaveChanges, currentTime, duration,
-    presets, activePresetId, onApplyPreset, onOpenPresetManager,
+    presets, activePresetId, onApplyPreset, onOpenPresetManager, onOpenShortcuts,
 }) {
     return (
         <header className="editor-header">
@@ -27,10 +29,19 @@ export default function EditorToolbar({
                     onOpenManager={onOpenPresetManager}
                 />
                 {hasPendingEdits && (
-                    <button className="btn-save-changes-header" onClick={onSaveChanges} title="Save timeline edits (Cmd+s)">
+                    <Button variant="primary" onClick={onSaveChanges} title="Save timeline edits (Cmd+s)">
                         Save Changes (Cmd+s)
-                    </button>
+                    </Button>
                 )}
+                <Tooltip content="Keyboard shortcuts" shortcut="?">
+                    <Button
+                        variant="ghost"
+                        iconOnly
+                        onClick={onOpenShortcuts}
+                        aria-label="Keyboard shortcuts"
+                        icon={<Keyboard size={16} />}
+                    />
+                </Tooltip>
                 <div className="time-display">
                     <Play size={14} />
                     <span className="time-current">{formatTime(currentTime)}</span>
