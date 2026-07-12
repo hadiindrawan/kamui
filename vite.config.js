@@ -30,15 +30,17 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, 'src/features/popup/index.html'),
         editor: resolve(__dirname, 'src/features/editor/index.html'),
+        recordings: resolve(__dirname, 'src/features/recordings/index.html'),
         offscreen: resolve(__dirname, 'src/core/offscreen/index.html'),
         'service-worker': resolve(__dirname, 'src/core/background/service-worker.js'),
         'cursor-tracker': resolve(__dirname, 'src/core/content/cursor-tracker.js'),
-        'recording-widget': resolve(__dirname, 'src/core/content/recording-widget.js')
+        'recording-widget': resolve(__dirname, 'src/core/content/recording-widget.js'),
+        'region-selector': resolve(__dirname, 'src/core/content/region-selector.js')
       },
       output: {
         entryFileNames: (chunkInfo) => {
           // Service worker and content scripts at root
-          if (chunkInfo.name === 'service-worker' || chunkInfo.name === 'cursor-tracker' || chunkInfo.name === 'recording-widget') {
+          if (chunkInfo.name === 'service-worker' || chunkInfo.name === 'cursor-tracker' || chunkInfo.name === 'recording-widget' || chunkInfo.name === 'region-selector') {
             return '[name].js';
           }
           // Other JS in assets

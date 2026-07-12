@@ -74,7 +74,7 @@
                 }
 
                 .garaga-widget-inner {
-                    background: rgba(35, 61, 77, 0.95);
+                    background: rgba(15, 16, 17, 0.95);
                     backdrop-filter: blur(10px);
                     border-radius: 12px;
                     padding: 12px 16px;
@@ -85,7 +85,7 @@
                 }
 
                 .garaga-widget:hover .garaga-widget-inner {
-                    background: rgba(35, 61, 77, 1);
+                    background: rgba(15, 16, 17, 1);
                     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
                 }
 
@@ -134,7 +134,7 @@
                 .garaga-stop-btn {
                     width: 100%;
                     padding: 10px 16px;
-                    background: #fe6d73;
+                    background: #e5484d;
                     border: none;
                     border-radius: 8px;
                     color: white;
@@ -149,9 +149,9 @@
                 }
 
                 .garaga-stop-btn:hover {
-                    background: #ff8589;
+                    background: #f2555a;
                     transform: translateY(-1px);
-                    box-shadow: 0 4px 12px rgba(254, 109, 115, 0.3);
+                    box-shadow: 0 4px 12px rgba(229, 72, 77, 0.3);
                 }
 
                 .garaga-stop-btn:active {

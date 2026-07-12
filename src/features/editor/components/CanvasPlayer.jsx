@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
-import { calculateCameraPosition, interpolateCamera } from '../utils/camera.js';
+import { calculateCameraPosition, interpolateCameraByTime } from '../utils/camera.js';
+import { computeSceneLayout, interpolateSceneLayout } from '../utils/coordinates.js';
+import { buildSceneModel, renderBackgroundBuffer, drawSceneFrame } from '../utils/scene-renderer.js';
+import { createFramingAnimator, TRANSITION_CONFIG } from '../utils/framing-transition.js';
+import { playClickSound } from '../services/click-sound.js';
+import { DEFAULT_CURSOR_SMOOTHING } from '../utils/cursor-smoothing.js';
 
 const CanvasPlayer = forwardRef(({
     recording,
@@ -8,7 +13,7 @@ const CanvasPlayer = forwardRef(({
     segments = [],
     zoomLevel = 2,
     zoomDuration = 800,
-    transitionDuration = 300,
+    transitionDuration = 600,
     playbackSpeed = 1,
     aspectRatio = '16:9',
     backgroundColor = '#1a2e3b',
@@ -16,15 +21,26 @@ const CanvasPlayer = forwardRef(({
     backgroundValue = '#1a2e3b', // color hex, gradient string, or image url
     backgroundBlur = 'none', // 'none', 'light', 'moderate', 'strong'
     insetPadding = 48,
+    cropToFill = false,
+    cropPanX = 0.5,
+    cropPanY = 0.5,
     showShadow = true,
     showBorder = false,
     showFollowCursor = false,
+    cursorSmoothing = DEFAULT_CURSOR_SMOOTHING,
+    cropZoom = 1,
     onTimeUpdate,
+    onPlaybackEnded,
+    onFrameTime,
     onDurationChange,
     onVideoDimensions,
     onSeek,
     borderRadius = 12,
-    isMuted = false
+    isMuted = false,
+    volume = 1,
+    clickAnimationStyle = 'ripple',
+    clickAnimationOpacity = 'med',
+    clickSound = 'none'
 }, ref) => {
     const canvasRef = useRef(null);
     const videoRefs = useRef([]);
@@ -34,15 +50,24 @@ const CanvasPlayer = forwardRef(({
     const lastRecordingIdRef = useRef(null); // Fix: Prevent redundant setup
     const rafRef = useRef(null);
     const lastCameraRef = useRef(null);
-    const clickAnimationsRef = useRef([]);
+    const lastCameraTsRef = useRef(null); // wall-clock ts of the last camera sample, for frame-rate-independent smoothing
     const containerRef = useRef(null);
     const backgroundImageRef = useRef(null);
     const backgroundBufferRef = useRef(null); // Cache blurred/rendered background
+    const renderFrameRef = useRef(null); // Stable handle so the rAF loop never closes over stale state
+    const layoutAnimRef = useRef(null); // { fromLayout, startTs, durationMs } for structural (aspect/fit) crossfades
+    const lastLayoutRef = useRef(null); // Last layout actually drawn, to seed transitions
+    // Numeric framing animator (crop zoom/pan, padding, global zoom level). Seeded
+    // lazily below once props are available so nothing animates on first paint.
+    const animatorRef = useRef(null);
+    const structuralRef = useRef(null); // Last discrete structural inputs, to detect aspect/fit/background changes
+    const ensureRenderLoopRef = useRef(null); // Stable handle to (re)start the rAF loop from effects
     const [isHoveringVideo, setIsHoveringVideo] = useState(false);
     const [isDraggingProgress, setIsDraggingProgress] = useState(false);
     const [hoverTime, setHoverTime] = useState(null);
     const [lastRefresh, setLastRefresh] = useState(0); // Trigger for settings-based re-renders
     const [metadataReady, setMetadataReady] = useState(false);
+    const lastSoundScanMsRef = useRef(null); // playhead ms of the previous frame's click-sound scan
 
     useImperativeHandle(ref, () => ({
         getCurrentTime: () => {
@@ -87,22 +112,34 @@ const CanvasPlayer = forwardRef(({
         }
     }));
 
-    // Sync muted state
+    // Sync muted state + volume
     useEffect(() => {
-        videoRefs.current.forEach(v => { if (v) v.muted = isMuted; });
-    }, [isMuted]);
+        videoRefs.current.forEach(v => { if (v) { v.muted = isMuted; v.volume = volume; } });
+    }, [isMuted, volume]);
 
     // Load background image when needed
     useEffect(() => {
         if (backgroundMode === 'image' && backgroundValue) {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => {
-                backgroundImageRef.current = img;
-                refreshBackground();
-                if (!isPlaying) renderFrame();
+            // A CORS-tagged request can fail when the same URL is already cached
+            // without CORS (e.g. by the FramingPanel's CSS `background:url(...)`
+            // preview), leaving the canvas background blank. Try with crossOrigin
+            // first; on error, retry once without it — the preview canvas is
+            // display-only so a tainted image is fine here (export preloads its
+            // own CORS image separately).
+            const loadImage = (useCors) => {
+                const img = new Image();
+                if (useCors) img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    backgroundImageRef.current = img;
+                    refreshBackground();
+                    if (!isPlaying) renderFrame();
+                };
+                img.onerror = () => {
+                    if (useCors) loadImage(false);
+                };
+                img.src = backgroundValue;
             };
-            img.src = backgroundValue;
+            loadImage(true);
         } else {
             backgroundImageRef.current = null;
             refreshBackground();
@@ -110,178 +147,83 @@ const CanvasPlayer = forwardRef(({
         }
     }, [backgroundMode, backgroundValue, backgroundBlur, backgroundColor]);
 
-    // Pre-calculate Scene Layout and Map Events (Memoized for Performance)
-    const sceneLayout = React.useMemo(() => {
-        const video = videoRefs.current[0];
-        if (!video || !video.videoWidth) return null;
-
-        const videoW = video.videoWidth;
-        const videoH = video.videoHeight;
-        let canvasW = videoW;
-        let canvasH = videoH;
-
-        if (aspectRatio !== 'Native') {
-            const ratios = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '4:5': 4 / 5 };
-            const targetRatio = ratios[aspectRatio] || 16 / 9;
-            if (targetRatio >= 1) {
-                canvasH = videoH;
-                canvasW = canvasH * targetRatio;
-            } else {
-                canvasW = videoH;
-                canvasH = canvasW / targetRatio;
-            }
-        }
-
-        const width = Math.round(canvasW);
-        const height = Math.round(canvasH);
-
-        // Calculate Video Placement
-        let vX = 0, vY = 0, vW = width, vH = height;
-        const videoRatio = videoW / videoH;
-
-        if (backgroundMode === 'hidden') {
-            const canvasRatio = width / height;
-            if (canvasRatio > videoRatio) {
-                vH = height;
-                vW = vH * videoRatio;
-                vX = (width - vW) / 2;
-            } else {
-                vW = width;
-                vH = vW / videoRatio;
-                vY = (height - vH) / 2;
-            }
-        } else {
-            const scaleBase = Math.min(width, height) / 1080;
-            const scaledPadding = insetPadding * scaleBase;
-            const safeW = width - (scaledPadding * 2);
-            const safeH = height - (scaledPadding * 2);
-            const fitScale = Math.min(safeW / videoW, safeH / videoH);
-            vW = videoW * fitScale;
-            vH = videoH * fitScale;
-            vX = (width - vW) / 2;
-            vY = (height - vH) / 2;
-        }
-
-        // Map Events
-        const mappedEvents = segments.map(seg => ({
-            ...seg,
-            time: seg.startTime,
-            type: seg.type || 'click',
-            x: (seg.x * vW + vX) / width,
-            y: (seg.y * vH + vY) / height
-        }));
-
-        if (showFollowCursor && recording?.events) {
-            const followEvents = recording.events.filter(e => e.type === 'follow' || e.type === 'move');
-
-            // Fix: Avoid spread operator on large arrays which can hit stack limits
-            for (const e of followEvents) {
-                mappedEvents.push({
-                    ...e,
-                    x: (e.x * vW + vX) / width,
-                    y: (e.y * vH + vY) / height
-                });
-            }
-        }
-
-        return {
-            width, height,
-            videoW, videoH,
-            vX, vY, vW, vH,
-            events: mappedEvents,
-            cameraConfig: {
-                videoWidth: width, videoHeight: height,
-                canvasWidth: width, canvasHeight: height,
-                zoomLevel, zoomDuration, transitionDuration
-            }
-        };
-    }, [recording, segments, aspectRatio, backgroundMode, insetPadding, showFollowCursor, zoomLevel, zoomDuration, transitionDuration, metadataReady]);
-
-    const parseCSSGradient = (cssString, ctx, width, height) => {
-        if (!cssString || typeof cssString !== 'string' || !cssString.includes('gradient')) {
-            return cssString;
-        }
-
-        try {
-            // Very basic parser for presets like linear-gradient(direction, color1, color2)
-            const colors = cssString.match(/#[a-fA-F0-9]{3,6}|rgba?\([^)]+\)/g);
-            if (!colors || colors.length < 2) return '#000';
-
-            let x0 = 0, y0 = 0, x1 = 0, y1 = height; // Default top to bottom
-
-            if (cssString.includes('to right')) {
-                x1 = width; y1 = 0;
-            } else if (cssString.includes('to top')) {
-                y0 = height; y1 = 0;
-            } else if (cssString.includes('135deg')) {
-                x1 = width; y1 = height;
-            } else if (cssString.includes('120deg')) {
-                x1 = width * 0.8; y1 = height;
-            }
-
-            const grad = ctx.createLinearGradient(x0, y0, x1, y1);
-            colors.forEach((color, i) => {
-                // Handle optional percentages like #fff 0%
-                const stop = i / (colors.length - 1);
-                grad.addColorStop(stop, color);
-            });
-            return grad;
-        } catch (e) {
-            console.warn('Failed to parse gradient:', e);
-            return '#000';
-        }
+    // Framing/background settings the shared scene renderer needs.
+    const rendererSettings = {
+        aspectRatio, backgroundMode, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
+        backgroundColor, backgroundValue, backgroundBlur,
+        zoomLevel, zoomDuration, transitionDuration, showFollowCursor, cursorSmoothing,
     };
 
-    const refreshBackground = () => {
-        if (!sceneLayout) return;
-        const { width, height } = sceneLayout;
+    // Pre-calculate the shared scene model (layout + mapped events + camera
+    // config), identical to what the exporter builds. Memoized for perf.
+    const sceneModel = React.useMemo(() => {
+        const video = videoRefs.current[0];
+        if (!video || !video.videoWidth) return null;
+        return buildSceneModel({
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            settings: rendererSettings,
+            segments,
+            recordingEvents: recording?.events || [],
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [recording, segments, aspectRatio, backgroundMode, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showFollowCursor, cursorSmoothing, zoomLevel, zoomDuration, transitionDuration, metadataReady]);
 
+    // Lazily seed the numeric framing animator with the current committed
+    // values so the first paint matches the props and nothing animates until
+    // the user actually changes a setting.
+    if (!animatorRef.current) {
+        animatorRef.current = createFramingAnimator({ cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding });
+        structuralRef.current = { aspectRatio, cropToFill, backgroundMode };
+    }
+
+    // Numeric framing changes (crop zoom/pan, padding, global zoom level) ease
+    // on their own per-field timelines whether paused or playing. Until the
+    // video's metadata is ready (settings still loading from IndexedDB) we snap
+    // instead, so opening a recording doesn't play an intro animation.
+    useEffect(() => {
+        const animator = animatorRef.current;
+        if (!metadataReady) {
+            animatorRef.current = createFramingAnimator({ cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding });
+            return;
+        }
+        animator.setTarget({ cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding }, performance.now());
+        ensureRenderLoopRef.current?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cropZoom, zoomLevel, cropPanX, cropPanY, insetPadding, metadataReady]);
+
+    // Structural changes alter the scene's pixel geometry discretely (canvas
+    // dimensions on an aspect switch, contain<->cover on a crop-to-fill toggle,
+    // the padded inset box appearing/disappearing with the background mode) and
+    // can't be lerped as a value, so we crossfade whole layouts. Seeded from the
+    // last drawn layout so a change mid-tween (numeric or structural) continues
+    // seamlessly. interpolateSceneLayout applies easeInOutCubic internally,
+    // which matches TRANSITION_CONFIG.aspect.easing — we only take its duration.
+    useEffect(() => {
+        const prev = structuralRef.current;
+        structuralRef.current = { aspectRatio, cropToFill, backgroundMode };
+        if (!metadataReady || !prev) return;
+        const changed = prev.aspectRatio !== aspectRatio || prev.cropToFill !== cropToFill || prev.backgroundMode !== backgroundMode;
+        if (!changed) return;
+        layoutAnimRef.current = { fromLayout: lastLayoutRef.current, startTs: performance.now(), durationMs: TRANSITION_CONFIG.aspect.durationMs };
+        ensureRenderLoopRef.current?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [aspectRatio, cropToFill, backgroundMode, metadataReady]);
+
+    const refreshBackground = () => {
+        if (!sceneModel) return;
         if (!backgroundBufferRef.current) {
             backgroundBufferRef.current = typeof OffscreenCanvas !== 'undefined'
-                ? new OffscreenCanvas(width, height)
+                ? new OffscreenCanvas(1, 1)
                 : document.createElement('canvas');
         }
-
-        const buffer = backgroundBufferRef.current;
-        if (buffer.width !== width || buffer.height !== height) {
-            buffer.width = width;
-            buffer.height = height;
-        }
-
-        const bctx = buffer.getContext('2d');
-        const blurs = { 'none': 0, 'light': 4, 'moderate': 12, 'strong': 24 };
-        const blurAmount = blurs[backgroundBlur] || 0;
-
-        bctx.clearRect(0, 0, width, height);
-        if (blurAmount > 0) bctx.filter = `blur(${blurAmount}px)`;
-
-        if (backgroundMode === 'color' || backgroundMode === 'hidden') {
-            bctx.fillStyle = backgroundMode === 'hidden' ? backgroundColor : (backgroundColor || '#1a2e3b');
-            bctx.fillRect(0, 0, width, height);
-        } else if (backgroundMode === 'gradient') {
-            bctx.fillStyle = parseCSSGradient(backgroundValue, bctx, width, height);
-            bctx.fillRect(0, 0, width, height);
-        } else if (backgroundMode === 'image' && backgroundImageRef.current) {
-            const img = backgroundImageRef.current;
-            const imgRatio = img.width / img.height;
-            const canvasRatio = width / height;
-            let dW = width, dH = height, dX = 0, dY = 0;
-            if (canvasRatio > imgRatio) {
-                dH = width / imgRatio;
-                dY = (height - dH) / 2;
-            } else {
-                dW = height * imgRatio;
-                dX = (width - dW) / 2;
-            }
-            bctx.drawImage(img, dX, dY, dW, dH);
-        }
-        bctx.filter = 'none';
+        renderBackgroundBuffer(backgroundBufferRef.current, sceneModel.layout, rendererSettings, backgroundImageRef.current);
     };
 
     useEffect(() => {
         refreshBackground();
         if (!isPlaying) renderFrame();
-    }, [sceneLayout, backgroundBlur, backgroundColor, backgroundValue]);
+    }, [sceneModel, backgroundBlur, backgroundColor, backgroundValue]);
 
     useEffect(() => {
         // Only trigger setup if ID really changed
@@ -314,12 +256,11 @@ const CanvasPlayer = forwardRef(({
                         if (isPlaying) video.play().catch(e => console.warn('Play error:', e));
                     }, { once: true });
                 }
-                renderLoop();
+                ensureRenderLoop();
             } else {
                 videoRefs.current.forEach(v => { if (v && !v.paused) v.pause(); });
-                if (rafRef.current) {
-                    cancelAnimationFrame(rafRef.current);
-                }
+                // Don't hard-cancel: a framing transition may still be settling.
+                // The loop stops itself once nothing needs animating.
             }
         }
     }, [isPlaying]);
@@ -357,8 +298,9 @@ const CanvasPlayer = forwardRef(({
         currentTime, zoomLevel,
         aspectRatio, backgroundMode,
         backgroundValue, backgroundBlur,
-        insetPadding, showShadow, showBorder, borderRadius, metadataReady,
-        sceneLayout
+        insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showShadow, showBorder, borderRadius, metadataReady,
+        clickAnimationStyle, clickAnimationOpacity,
+        sceneModel
     ]);
 
     async function setupVideo() {
@@ -418,6 +360,8 @@ const CanvasPlayer = forwardRef(({
                         const nextVideo = videoRefs.current[idx + 1];
                         nextVideo.currentTime = 0;
                         if (isPlaying) nextVideo.play().catch(e => console.warn(e));
+                    } else if (onPlaybackEnded) {
+                        onPlaybackEnded();
                     }
                 };
 
@@ -435,251 +379,154 @@ const CanvasPlayer = forwardRef(({
         });
     }
 
+    // The loop runs while the video is playing OR a framing transition (numeric
+    // tween or structural crossfade) is still settling — the latter is what lets
+    // crop/zoom/aspect changes ease while paused.
+    function shouldKeepAnimating() {
+        const video = videoRefs.current[activeVideoIndex];
+        const playing = video && !video.paused;
+        return playing || animatorRef.current?.isActive() || !!layoutAnimRef.current;
+    }
+
     function renderLoop() {
-        if (videoRefs.current[activeVideoIndex] && !videoRefs.current[activeVideoIndex].paused) {
-            renderFrame();
+        // Call through a ref so the scheduled callback always uses the latest
+        // props/state (framing, segments...) instead of the closure captured
+        // when the loop started.
+        if (renderFrameRef.current) renderFrameRef.current();
+        if (shouldKeepAnimating()) {
+            rafRef.current = requestAnimationFrame(renderLoop);
+        } else {
+            rafRef.current = null;
+        }
+    }
+
+    function ensureRenderLoop() {
+        if (rafRef.current == null) {
             rafRef.current = requestAnimationFrame(renderLoop);
         }
     }
+    ensureRenderLoopRef.current = ensureRenderLoop;
 
     function renderFrame() {
         const canvas = canvasRef.current;
         const video = videoRefs.current[activeVideoIndex];
-        const layout = sceneLayout;
+        const model = sceneModel;
         const backgroundBuffer = backgroundBufferRef.current;
 
-        if (!canvas || !video || !video.videoWidth || !layout || !backgroundBuffer) return;
+        if (!canvas || !video || !video.videoWidth || !model || !backgroundBuffer) return;
 
         const ctx = canvas.getContext('2d', { alpha: false });
 
-        // Use prop as source of truth when paused to ensure instant feedback
-        // Use video.currentTime when playing for smooth playback
+        // Prop time when paused (instant scrub feedback); media time when playing.
         const timeToRender = isPlaying ? video.currentTime : currentTime;
         const currentTimeMs = (timeToRender || 0) * 1000;
 
-        // Sync canvas size
+        // Click sounds: fire for every (deduped) click the playhead crossed
+        // since the last frame. A window cap keeps seeks/segment jumps from
+        // machine-gunning every click in between.
+        if (!isPlaying) {
+            lastSoundScanMsRef.current = null;
+        } else {
+            const prevMs = lastSoundScanMsRef.current;
+            lastSoundScanMsRef.current = currentTimeMs;
+            if (prevMs != null && currentTimeMs > prevMs && currentTimeMs - prevMs < 1000
+                && !isMuted && clickSound && clickSound !== 'none') {
+                for (const e of model.clickEvents || []) {
+                    if (e.time > prevMs && e.time <= currentTimeMs) {
+                        playClickSound(clickSound, { volume });
+                    }
+                }
+            }
+        }
+
+        // Report a frame-accurate global time so the timeline playhead can move
+        // smoothly at rAF cadence instead of the media element's coarse
+        // (100-300ms) timeupdate events.
+        if (isPlaying && onFrameTime) {
+            let globalTime = video.currentTime || 0;
+            for (let i = 0; i < activeVideoIndex; i++) globalTime += segmentDurations[i] || 0;
+            onFrameTime(globalTime);
+        }
+
+        const nowAnim = performance.now();
+
+        // Layout is rebuilt from the *animated* numeric framing values so crop
+        // zoom/pan and padding ease every frame (paused or playing). The
+        // discrete inputs (aspect/fit/background) come straight from props.
+        const anim = animatorRef.current.sample(nowAnim).settings;
+        const targetLayout = {
+            ...computeSceneLayout({
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+                aspectRatio,
+                backgroundMode,
+                insetPadding: anim.insetPadding,
+                cropToFill,
+                cropPanX: anim.cropPanX,
+                cropPanY: anim.cropPanY,
+                cropZoom: anim.cropZoom,
+            }),
+            videoW: video.videoWidth,
+            videoH: video.videoHeight,
+        };
+
+        // Crossfade whole layouts for a structural (aspect/fit/background)
+        // change. interpolateSceneLayout eases the raw progress itself.
+        let layout = targetLayout;
+        const structural = layoutAnimRef.current;
+        if (structural && structural.fromLayout) {
+            const t = (nowAnim - structural.startTs) / structural.durationMs;
+            if (t >= 1) {
+                layoutAnimRef.current = null;
+            } else {
+                layout = interpolateSceneLayout(structural.fromLayout, targetLayout, t);
+            }
+        } else if (structural) {
+            layoutAnimRef.current = null; // no seed layout captured yet; snap
+        }
+        lastLayoutRef.current = layout;
+
         if (canvas.width !== layout.width || canvas.height !== layout.height) {
             canvas.width = layout.width;
             canvas.height = layout.height;
         }
 
-        // Calculate SCENE Camera
-        const targetCamera = calculateCameraPosition(currentTimeMs, layout.events, layout.cameraConfig);
-        // Snap camera if paused, otherwise interpolate for smooth motion while playing
-        const factor = isPlaying ? 0.12 : 1.0;
-        const camera = interpolateCamera(lastCameraRef.current, targetCamera, factor);
-        lastCameraRef.current = camera;
-
-        ctx.save();
-        ctx.clearRect(0, 0, layout.width, layout.height);
-
-        // Apply Camera Transform
-        ctx.scale(layout.width / camera.srcW, layout.height / camera.srcH);
-        ctx.translate(-camera.srcX, -camera.srcY);
-
-        // 1. Draw Background (from pre-rendered buffer)
-        ctx.drawImage(backgroundBuffer, 0, 0);
-
-        // 2. Draw Video
-        const vRadius = Math.max(0, borderRadius * (layout.vW / layout.videoW));
-
-        if (backgroundMode !== 'hidden' && showShadow) {
-            ctx.save();
-            ctx.fillStyle = 'black';
-            ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur = 40; ctx.shadowOffsetY = 20;
-
-            if (ctx.roundRect) {
-                ctx.beginPath();
-                ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
-                ctx.fill();
-            } else {
-                ctx.fillRect(layout.vX, layout.vY, layout.vW, layout.vH);
-            }
-            ctx.restore();
-        }
-
-        ctx.save();
-        if (vRadius > 0 && ctx.roundRect) {
-            ctx.beginPath();
-            ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
-            ctx.clip();
-        }
-
-        ctx.drawImage(video, 0, 0, layout.videoW, layout.videoH, layout.vX, layout.vY, layout.vW, layout.vH);
-        ctx.restore();
-
-        if (backgroundMode !== 'hidden' && showBorder) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-            ctx.lineWidth = 2;
-            if (ctx.roundRect) {
-                ctx.beginPath();
-                ctx.roundRect(layout.vX, layout.vY, layout.vW, layout.vH, vRadius);
-                ctx.stroke();
-            } else {
-                ctx.strokeRect(layout.vX, layout.vY, layout.vW, layout.vH);
-            }
-        }
-
-        // 3. Overlays
-        updateClickAnimations(currentTimeMs, layout.events);
-        drawSceneOverlays(ctx, currentTimeMs, layout.events);
-
-        ctx.restore();
-    }
-
-    function drawBackground(ctx, w, h) {
-        if (backgroundMode === 'hidden') {
-            ctx.fillStyle = backgroundColor;
-            ctx.fillRect(0, 0, w, h);
-            return;
-        }
-
-        // Blur filter if needed
-        const blurs = {
-            'none': 0,
-            'light': 4,
-            'moderate': 12,
-            'strong': 24
+        // Resolve the camera against the drawn geometry, and ease the global
+        // zoom level through the same animated value so the depth doesn't snap.
+        const cameraConfig = {
+            ...model.cameraConfig,
+            videoWidth: layout.width,
+            videoHeight: layout.height,
+            canvasWidth: layout.width,
+            canvasHeight: layout.height,
+            zoomLevel: anim.zoomLevel,
         };
-        const blurAmount = blurs[backgroundBlur] || 0;
 
-        if (blurAmount > 0) ctx.filter = `blur(${blurAmount}px)`;
+        const targetCamera = calculateCameraPosition(currentTimeMs, model.events, cameraConfig);
+        const nowTs = performance.now();
+        const dtMs = isPlaying && lastCameraTsRef.current != null ? nowTs - lastCameraTsRef.current : null;
+        const camera = dtMs != null
+            ? interpolateCameraByTime(lastCameraRef.current, targetCamera, dtMs)
+            : targetCamera;
+        lastCameraRef.current = camera;
+        lastCameraTsRef.current = nowTs;
 
-        if (backgroundMode === 'color') {
-            ctx.fillStyle = backgroundValue || backgroundColor;
-            ctx.fillRect(0, 0, w, h);
-        } else if (backgroundMode === 'gradient') {
-            // Basic parsing of linear-gradient string could be complex.
-            // For now support simple top-to-bottom or 2-color array?
-            // Or assumes `backgroundValue` is a CanvasGradient? No, it's CSS string usually.
-            // Let's assume simpler preset inputs: 
-            // If array: [color1, color2] -> Linear Gradient
-
-            if (Array.isArray(backgroundValue)) {
-                const grad = ctx.createLinearGradient(0, 0, 0, h);
-                backgroundValue.forEach((color, i) => {
-                    grad.addColorStop(i / (backgroundValue.length - 1), color);
-                });
-                ctx.fillStyle = grad;
-            } else {
-                // Fallback
-                ctx.fillStyle = backgroundValue || '#000';
-            }
-            ctx.fillRect(0, 0, w, h);
-
-        } else if (backgroundMode === 'image') {
-            if (backgroundImageRef.current) {
-                // Cover behavior for background image
-                const img = backgroundImageRef.current;
-                const imgRatio = img.width / img.height;
-                const canvasRatio = w / h;
-
-                let drawW, drawH, drawX, drawY;
-
-                if (canvasRatio > imgRatio) {
-                    drawW = w;
-                    drawH = w / imgRatio;
-                    drawX = 0;
-                    drawY = (h - drawH) / 2;
-                } else {
-                    drawH = h;
-                    drawW = h * imgRatio;
-                    drawX = (w - drawW) / 2;
-                    drawY = 0;
-                }
-                ctx.drawImage(img, drawX, drawY, drawW, drawH);
-            } else {
-                ctx.fillStyle = '#222';
-                ctx.fillRect(0, 0, w, h);
-            }
-        }
-
-        ctx.filter = 'none'; // Reset filter
-    }
-
-    function drawSceneOverlays(ctx, currentTimeMs, events) {
-        // Clicks
-        clickAnimationsRef.current.forEach(anim => {
-            const elapsed = currentTimeMs - anim.eventTime;
-            const progress = Math.min(elapsed / 600, 1);
-
-            // anim.x, anim.y are 0-1 SCENE relative
-            // We need Scene Pixels
-            // Note: Canvas.width/height in `anim.viewportWidth` were overridden in mapping step.
-            // But we can just use current canvas dimensions if we assume constant layout...
-            // Or better, use the mapped coordinates directly.
-
-            const cx = anim.x * ctx.canvas.width;
-            const cy = anim.y * ctx.canvas.height;
-
-            for (let ring = 0; ring < 3; ring++) {
-                const ringProgress = Math.min(1, (progress - ring * 0.1) / 0.7);
-                if (ringProgress <= 0) continue;
-
-                const radius = 8 + ringProgress * 40;
-                const alpha = (1 - ringProgress) * 0.6;
-
-                ctx.strokeStyle = `rgba(254, 109, 115, ${alpha})`;
-                ctx.lineWidth = 2 - ringProgress;
-                ctx.beginPath();
-                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-                ctx.stroke();
-            }
+        drawSceneFrame(ctx, video, currentTimeMs, model, {
+            layout,
+            camera,
+            backgroundBuffer,
+            showShadow,
+            showBorder,
+            borderRadius,
+            backgroundMode,
+            showCursorHighlight: true,
+            clickStyle: clickAnimationStyle,
+            clickOpacity: clickAnimationOpacity,
         });
-
-        // Cursor
-        const cursorEvent = findCurrentCursor(currentTimeMs, events);
-        if (cursorEvent) {
-            const cx = cursorEvent.x * ctx.canvas.width;
-            const cy = cursorEvent.y * ctx.canvas.height;
-
-            const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 12);
-            gradient.addColorStop(0, 'rgba(254, 109, 115, 1)');
-            gradient.addColorStop(0.5, 'rgba(254, 109, 115, 0.6)');
-            gradient.addColorStop(1, 'rgba(254, 109, 115, 0)');
-
-            ctx.fillStyle = gradient;
-            ctx.beginPath();
-            ctx.arc(cx, cy, 12, 0, Math.PI * 2);
-            ctx.fill();
-
-            // White center
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-            ctx.beginPath();
-            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
     }
 
-    // Removed old drawClickAnimations and drawCursor as they are replaced by drawSceneOverlays
-    // and mapping logic is moved inside renderFrame.
-    function updateClickAnimations(currentTimeMs, events) {
-        const clickEvents = events.filter(e =>
-            currentTimeMs >= e.time && currentTimeMs <= e.time + 600
-        );
-
-        clickEvents.forEach(event => {
-            if (!clickAnimationsRef.current.some(a => a.eventTime === event.time)) {
-                clickAnimationsRef.current.push({
-                    eventTime: event.time,
-                    x: event.x,
-                    y: event.y
-                });
-            }
-        });
-
-        clickAnimationsRef.current = clickAnimationsRef.current.filter(
-            a => currentTimeMs <= a.eventTime + 600
-        );
-    }
-
-    function findCurrentCursor(timeMs, events) {
-        for (let i = events.length - 1; i >= 0; i--) {
-            if (events[i].time <= timeMs) return events[i];
-        }
-        return events[0];
-    }
+    // Keep the ref pointing at the freshest renderFrame closure every render.
+    renderFrameRef.current = renderFrame;
 
     // ... Mouse interaction handlers ...
     // Note: Mouse interaction (onSeek) on the canvas needs to account for the new layout!

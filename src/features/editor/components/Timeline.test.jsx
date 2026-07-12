@@ -33,8 +33,33 @@ describe('Timeline', () => {
             { id: '2', type: 'crop', startTime: 20000, duration: 2000 }
         ];
         render(<Timeline duration={100} currentTime={10} segments={segments} />);
-        
+
         expect(screen.getByText('Zoom')).toBeInTheDocument();
         expect(screen.getByText('Crop')).toBeInTheDocument();
+    });
+
+    it('should render one row per track and only show segments matching that track', () => {
+        const segments = [
+            { id: '1', type: 'zoom', startTime: 10000, duration: 2000, trackId: 0 },
+            { id: '2', type: 'crop', startTime: 10000, duration: 2000, trackId: 1 },
+        ];
+        const tracks = [{ id: 0, label: 'Track 1' }, { id: 1, label: 'Track 2' }];
+        const { container } = render(
+            <Timeline duration={100} currentTime={10} segments={segments} tracks={tracks} />
+        );
+
+        // Two track rows (plus the hidden ruler row), each holding one segment.
+        const trackContents = container.querySelectorAll('.track-content');
+        expect(trackContents.length).toBe(tracks.length);
+        expect(screen.getByText('Zoom')).toBeInTheDocument();
+        expect(screen.getByText('Crop')).toBeInTheDocument();
+    });
+
+    it('should call onAddTrack when the add-track button is clicked', async () => {
+        const onAddTrack = jest.fn();
+        render(<Timeline duration={100} currentTime={10} segments={[]} onAddTrack={onAddTrack} />);
+
+        await userEvent.click(screen.getByText('Add Track'));
+        expect(onAddTrack).toHaveBeenCalled();
     });
 });

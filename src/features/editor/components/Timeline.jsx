@@ -2,16 +2,21 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { Rnd } from 'react-rnd';
 import {
     Plus, ZoomIn, Scissors, Trash2, RotateCcw, RotateCw,
-    RefreshCw, ZoomOut, Crop, ChevronDown
+    RefreshCw, ZoomOut, Crop, ChevronDown, Layers, X
 } from 'lucide-react';
+import { formatTime } from '../utils/time.js';
 
 const Timeline = React.memo(function Timeline({
     duration,
     currentTime,
+    registerPlayhead,
     segments = [],
+    tracks = [{ id: 0, label: 'Track 1' }],
     selectedSegmentId,
     onSeek,
     onAddSegment,
+    onAddTrack,
+    onRemoveTrack,
     onUpdateSegment,
     onSelectSegment,
     onDeleteSegment,
@@ -28,6 +33,7 @@ const Timeline = React.memo(function Timeline({
     const [isTrimMode, setIsTrimMode] = useState(false);
     const [trimDragging, setTrimDragging] = useState(null);
     const [showSegmentTypeMenu, setShowSegmentTypeMenu] = useState(false);
+    const [activeTrackId, setActiveTrackId] = useState(tracks[0]?.id ?? 0);
     const dropdownRef = useRef(null);
 
     // Close dropdown when clicking outside
@@ -62,13 +68,6 @@ const Timeline = React.memo(function Timeline({
         return markers;
     }, [duration, timelineZoom]);
 
-    const formatTime = (seconds) => {
-        if (!Number.isFinite(seconds)) return '00:00';
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    };
-
     const getPositionPercent = useCallback((time) => {
         if (!duration || duration <= 0) return 0;
         return Math.max(0, Math.min(100, (time / duration) * 100));
@@ -92,18 +91,6 @@ const Timeline = React.memo(function Timeline({
             onSeek(time);
         }
     }, [trimDragging, getTimeFromPosition, onSeek, onSelectSegment]);
-
-    const handleSegmentMouseDown = useCallback((e, segment, edge) => {
-        e.stopPropagation();
-        e.preventDefault();
-
-        setIsDragging({ segmentId: segment.id, edge });
-        setDragStart({
-            x: e.clientX,
-            startTime: segment.startTime,
-            duration: segment.duration
-        });
-    }, []);
 
     const handleTrimMouseDown = useCallback((e, edge) => {
         e.stopPropagation();
@@ -142,6 +129,17 @@ const Timeline = React.memo(function Timeline({
 
     const actualTrimEnd = trimEnd || duration;
 
+    // Browsers report a Mac trackpad pinch gesture as a wheel event with
+    // ctrlKey set (there's no dedicated pinch event on the web platform).
+    // Plain two-finger scroll (no ctrlKey) is left alone so it still scrolls
+    // the timeline horizontally via the container's native overflow.
+    const handleWheelZoom = useCallback((e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        const delta = -e.deltaY * 0.01;
+        setTimelineZoom((z) => Math.max(0.5, Math.min(4, z + delta)));
+    }, []);
+
     return (
         <div className="timeline-editor">
             {/* Toolbar */}
@@ -162,7 +160,7 @@ const Timeline = React.memo(function Timeline({
                                 <button
                                     className="dropdown-item"
                                     onClick={() => {
-                                        onAddSegment && onAddSegment('zoom');
+                                        onAddSegment && onAddSegment('zoom', activeTrackId);
                                         setShowSegmentTypeMenu(false);
                                     }}
                                 >
@@ -172,7 +170,7 @@ const Timeline = React.memo(function Timeline({
                                 <button
                                     className="dropdown-item"
                                     onClick={() => {
-                                        onAddSegment && onAddSegment('crop');
+                                        onAddSegment && onAddSegment('crop', activeTrackId);
                                         setShowSegmentTypeMenu(false);
                                     }}
                                 >
@@ -237,12 +235,18 @@ const Timeline = React.memo(function Timeline({
                     </button>
                 </div>
 
+                <div className="timeline-legend" title="Segment colors on the tracks below">
+                    <span className="legend-item"><span className="legend-swatch legend-swatch-zoom" /> Zoom segment</span>
+                    <span className="legend-item"><span className="legend-swatch legend-swatch-crop" /> Crop segment</span>
+                    <span className="legend-item"><span className="legend-swatch legend-swatch-trim" /> Trimmed region</span>
+                </div>
+
                 <div className="toolbar-right">
                     <div className="zoom-control">
                         <button
                             className="zoom-btn"
                             onClick={() => setTimelineZoom(Math.max(0.5, timelineZoom - 0.5))}
-                            title="Zoom out timeline"
+                            title="Zoom out timeline (or Ctrl+scroll)"
                         >
                             <ZoomOut size={14} />
                         </button>
@@ -254,13 +258,13 @@ const Timeline = React.memo(function Timeline({
                             value={timelineZoom}
                             onChange={(e) => setTimelineZoom(parseFloat(e.target.value))}
                             className="zoom-slider"
-                            title="Timeline zoom"
+                            title="Timeline zoom (or Ctrl+scroll)"
                         />
                         <span className="zoom-label">{timelineZoom.toFixed(1)}x</span>
                         <button
                             className="zoom-btn"
                             onClick={() => setTimelineZoom(Math.min(4, timelineZoom + 0.5))}
-                            title="Zoom in timeline"
+                            title="Zoom in timeline (or Ctrl+scroll)"
                         >
                             <ZoomIn size={14} />
                         </button>
@@ -269,7 +273,11 @@ const Timeline = React.memo(function Timeline({
             </div>
 
             {/* Scrollable Timeline Area */}
-            <div className="timeline-scroll-area" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+            <div
+                className="timeline-scroll-area"
+                style={{ overflowX: 'auto', overflowY: 'hidden' }}
+                onWheel={handleWheelZoom}
+            >
                 <div
                     className="tracks-wrapper"
                     style={{
@@ -343,8 +351,11 @@ const Timeline = React.memo(function Timeline({
                                     </>
                                 )}
 
-                                {/* Playhead */}
+                                {/* Playhead — position driven imperatively via
+                                    registerPlayhead (rAF while playing, currentTime
+                                    sync while paused) for smooth 60fps motion. */}
                                 <div
+                                    ref={registerPlayhead}
                                     className="playhead"
                                     style={{
                                         left: `${getPositionPercent(currentTime)}%`,
@@ -361,93 +372,123 @@ const Timeline = React.memo(function Timeline({
                         </div>
                     </div>
 
-                    {/* Segments Track */}
-                    <div className="segments-track">
-                        <div className="track-label">
-                            <ZoomIn size={14} />
-                        </div>
-                        <div 
-                            className="track-content" 
-                            ref={segmentsTrackRef}
-                            onClick={() => onSelectSegment && onSelectSegment(null)}
-                        >
-                            {segments.length > 0 && segments.map((segment) => {
-                                const leftPercent = getPositionPercent(segment.startTime / 1000);
-                                const widthPercent = (segment.duration / 1000 / duration) * 100;
-                                const trackWidth = segmentsTrackRef.current?.getBoundingClientRect().width || 1000;
+                    {/* Segment Tracks — one row per track, so segments on different
+                        tracks can occupy the same time range (stacking). */}
+                    {tracks.map((track, trackIdx) => {
+                        const trackSegments = segments.filter((s) => (s.trackId ?? 0) === track.id);
+                        return (
+                            <div
+                                className={`segments-track ${activeTrackId === track.id ? 'track-active' : ''}`}
+                                key={track.id}
+                            >
+                                <div className="track-label" title={track.label}>
+                                    <Layers size={14} />
+                                    {tracks.length > 1 && (
+                                        <button
+                                            className="track-remove-btn"
+                                            title={`Remove ${track.label}`}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onRemoveTrack && onRemoveTrack(track.id);
+                                            }}
+                                        >
+                                            <X size={10} />
+                                        </button>
+                                    )}
+                                </div>
+                                <div
+                                    className="track-content"
+                                    ref={trackIdx === 0 ? segmentsTrackRef : undefined}
+                                    onClick={() => {
+                                        setActiveTrackId(track.id);
+                                        onSelectSegment && onSelectSegment(null);
+                                    }}
+                                >
+                                    {trackSegments.map((segment) => {
+                                        const leftPercent = getPositionPercent(segment.startTime / 1000);
+                                        const widthPercent = (segment.duration / 1000 / duration) * 100;
+                                        const trackWidth = segmentsTrackRef.current?.getBoundingClientRect().width || 1000;
 
-                                const minWidthPx = Math.max(2, (0.2 / duration) * trackWidth); // Minimum 0.2s visible or 2px
+                                        const minWidthPx = Math.max(2, (0.2 / duration) * trackWidth); // Minimum 0.2s visible or 2px
 
-                                return (
-                                    <Rnd
-                                        key={segment.id}
-                                        position={{
-                                            x: (leftPercent / 100) * trackWidth,
-                                            y: 4
-                                        }}
-                                        size={{
-                                            width: Math.max((widthPercent / 100) * trackWidth, minWidthPx),
-                                            height: 32
-                                        }}
-                                        onDragStop={(e, d) => {
-                                            const newLeftPercent = (d.x / trackWidth) * 100;
-                                            const newTime = (newLeftPercent / 100) * duration * 1000;
-                                            onUpdateSegment(segment.id, { startTime: Math.max(0, newTime) }, true);
-                                        }}
-                                        onResizeStop={(e, direction, ref, delta, position) => {
-                                            const newWidth = parseInt(ref.style.width);
-                                            const newLeftPercent = (position.x / trackWidth) * 100;
-                                            const widthPercent = (newWidth / trackWidth) * 100;
+                                        return (
+                                            <Rnd
+                                                key={segment.id}
+                                                position={{
+                                                    x: (leftPercent / 100) * trackWidth,
+                                                    y: 4
+                                                }}
+                                                size={{
+                                                    width: Math.max((widthPercent / 100) * trackWidth, minWidthPx),
+                                                    height: 32
+                                                }}
+                                                onDragStop={(e, d) => {
+                                                    const newLeftPercent = (d.x / trackWidth) * 100;
+                                                    const newTime = (newLeftPercent / 100) * duration * 1000;
+                                                    onUpdateSegment(segment.id, { startTime: Math.max(0, newTime) }, true);
+                                                }}
+                                                onResizeStop={(e, direction, ref, delta, position) => {
+                                                    const newWidth = parseInt(ref.style.width);
+                                                    const newLeftPercent = (position.x / trackWidth) * 100;
+                                                    const widthPercent = (newWidth / trackWidth) * 100;
 
-                                            const updates = {};
-                                            if (direction.includes('left')) {
-                                                const newTime = (newLeftPercent / 100) * duration * 1000;
-                                                const oldEndTime = segment.startTime + segment.duration;
-                                                updates.startTime = Math.max(0, newTime);
-                                                updates.duration = oldEndTime - updates.startTime;
-                                            } else if (direction.includes('right')) {
-                                                updates.duration = (widthPercent / 100) * duration * 1000;
-                                            }
+                                                    const updates = {};
+                                                    if (direction.includes('left')) {
+                                                        const newTime = (newLeftPercent / 100) * duration * 1000;
+                                                        const oldEndTime = segment.startTime + segment.duration;
+                                                        updates.startTime = Math.max(0, newTime);
+                                                        updates.duration = oldEndTime - updates.startTime;
+                                                    } else if (direction.includes('right')) {
+                                                        updates.duration = (widthPercent / 100) * duration * 1000;
+                                                    }
 
-                                            onUpdateSegment(segment.id, updates, true);
-                                        }}
-                                        bounds="parent"
-                                        enableResizing={{
-                                            left: true,
-                                            right: true,
-                                            top: false,
-                                            bottom: false
-                                        }}
-                                        resizeHandleStyles={{
-                                            left: { width: '8px', cursor: 'ew-resize' },
-                                            right: { width: '8px', cursor: 'ew-resize' }
-                                        }}
-                                        dragAxis="x"
-                                        className={`segment-rnd segment-${segment.type || 'zoom'} ${selectedSegmentId === segment.id ? 'segment-selected' : ''
-                                            }`}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onSelectSegment && onSelectSegment(segment.id);
-                                        }}
-                                    >
-                                        <div className="segment-content">
-                                            {segment.type === 'crop' ? <Crop size={12} /> : <ZoomIn size={12} />}
-                                            <span>
-                                                {segment.type === 'crop' ? 'Crop' :
-                                                    segment.type === 'typing' ? 'Type' :
-                                                        segment.type === 'selection' ? 'Select' :
-                                                            segment.type === 'dblclick' ? 'DblClick' :
-                                                                segment.type === 'click' ? 'Click' : 'Zoom'}
-                                            </span>
-                                        </div>
-                                    </Rnd>
-                                );
-                            })}
-                        </div>
-                        <div className="track-label">
-                            <Scissors size={14} />
-                        </div>
-                    </div>
+                                                    onUpdateSegment(segment.id, updates, true);
+                                                }}
+                                                bounds="parent"
+                                                enableResizing={{
+                                                    left: true,
+                                                    right: true,
+                                                    top: false,
+                                                    bottom: false
+                                                }}
+                                                resizeHandleStyles={{
+                                                    left: { width: '8px', cursor: 'ew-resize' },
+                                                    right: { width: '8px', cursor: 'ew-resize' }
+                                                }}
+                                                dragAxis="x"
+                                                className={`segment-rnd segment-${segment.type || 'zoom'} ${selectedSegmentId === segment.id ? 'segment-selected' : ''
+                                                    }`}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setActiveTrackId(track.id);
+                                                    onSelectSegment && onSelectSegment(segment.id);
+                                                }}
+                                            >
+                                                <div className="segment-content">
+                                                    {segment.type === 'crop' ? <Crop size={12} /> : <ZoomIn size={12} />}
+                                                    <span>
+                                                        {segment.type === 'crop' ? 'Crop' :
+                                                            segment.type === 'typing' ? 'Type' :
+                                                                segment.type === 'selection' ? 'Select' :
+                                                                    segment.type === 'dblclick' ? 'DblClick' :
+                                                                        segment.type === 'click' ? 'Click' : 'Zoom'}
+                                                    </span>
+                                                </div>
+                                            </Rnd>
+                                        );
+                                    })}
+                                </div>
+                                <div className="track-label" style={{ opacity: 0 }}>
+                                    <Scissors size={14} />
+                                </div>
+                            </div>
+                        );
+                    })}
+
+                    <button className="add-track-btn" onClick={() => onAddTrack && onAddTrack()}>
+                        <Plus size={12} />
+                        <span>Add Track</span>
+                    </button>
                 </div>
             </div>
         </div>

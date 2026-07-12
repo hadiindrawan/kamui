@@ -1,10 +1,11 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'BeuntaRecordings';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_NAME = 'recordings';
 const CHUNKS_STORE = 'chunks';
 const EVENT_LOGS_STORE = 'event_logs';
+const PRESETS_STORE = 'presets';
 
 // Initialize database
 export async function initDB() {
@@ -21,6 +22,9 @@ export async function initDB() {
             if (!db.objectStoreNames.contains(EVENT_LOGS_STORE)) {
                 const eventStore = db.createObjectStore(EVENT_LOGS_STORE, { autoIncrement: true });
                 eventStore.createIndex('sessionId', 'sessionId');
+            }
+            if (!db.objectStoreNames.contains(PRESETS_STORE)) {
+                db.createObjectStore(PRESETS_STORE, { keyPath: 'id' });
             }
         }
     });
@@ -219,4 +223,30 @@ export async function updateRecording(id, updates) {
     }
     const updated = { ...recording, ...updates };
     return db.put(STORE_NAME, updated);
+}
+
+// --- Presets ---
+
+// Get all saved editor presets
+export async function getAllPresets() {
+    const db = await initDB();
+    return db.getAll(PRESETS_STORE);
+}
+
+// Get a single preset by id
+export async function getPreset(id) {
+    const db = await initDB();
+    return db.get(PRESETS_STORE, id);
+}
+
+// Create or update a preset (keyPath: id)
+export async function savePreset(preset) {
+    const db = await initDB();
+    return db.put(PRESETS_STORE, preset);
+}
+
+// Delete a preset by id
+export async function deletePreset(id) {
+    const db = await initDB();
+    return db.delete(PRESETS_STORE, id);
 }
