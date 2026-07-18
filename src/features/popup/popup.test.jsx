@@ -23,7 +23,7 @@ describe('Popup', () => {
         render(<Popup />);
         
         await waitFor(() => {
-            expect(screen.getByText('Beunta')).toBeInTheDocument();
+            expect(screen.getByText('Kamui')).toBeInTheDocument();
             expect(screen.getByText('Start Recording')).toBeInTheDocument();
             expect(screen.getByText('Upload Video')).toBeInTheDocument();
         });

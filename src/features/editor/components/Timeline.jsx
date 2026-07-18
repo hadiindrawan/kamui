@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { Rnd } from 'react-rnd';
 import {
     Plus, ZoomIn, Scissors, Trash2, RotateCcw, RotateCw,
-    RefreshCw, ZoomOut, Crop, ChevronDown, Layers, X
+    RefreshCw, ZoomOut, Crop, ChevronDown, Layers, X, Captions
 } from 'lucide-react';
 import { formatTime } from '../utils/time.js';
 
@@ -25,10 +25,14 @@ const Timeline = React.memo(function Timeline({
     trimEnd,
     onTrimChange,
     onUndo,
-    onRedo
+    onRedo,
+    captions = [],
+    onUpdateCaption,
+    onSelectCaption
 }) {
     const rulerTrackRef = useRef(null);
     const segmentsTrackRef = useRef(null);
+    const captionsTrackRef = useRef(null);
     const [timelineZoom, setTimelineZoom] = useState(1);
     const [isTrimMode, setIsTrimMode] = useState(false);
     const [trimDragging, setTrimDragging] = useState(null);
@@ -484,6 +488,75 @@ const Timeline = React.memo(function Timeline({
                             </div>
                         );
                     })}
+
+                    {/* Caption track — blocks are in seconds (source time). */}
+                    {captions.length > 0 && (
+                        <div className="segments-track caption-track">
+                            <div className="track-label" title="Captions">
+                                <Captions size={14} />
+                            </div>
+                            <div
+                                className="track-content"
+                                ref={captionsTrackRef}
+                                onClick={() => onSelectCaption && onSelectCaption(null)}
+                            >
+                                {captions.map((caption) => {
+                                    const leftPercent = getPositionPercent(caption.start);
+                                    const widthPercent = ((caption.end - caption.start) / duration) * 100;
+                                    const trackWidth = captionsTrackRef.current?.getBoundingClientRect().width || 1000;
+                                    const minWidthPx = Math.max(2, (0.2 / duration) * trackWidth);
+
+                                    return (
+                                        <Rnd
+                                            key={caption.id}
+                                            position={{ x: (leftPercent / 100) * trackWidth, y: 4 }}
+                                            size={{
+                                                width: Math.max((widthPercent / 100) * trackWidth, minWidthPx),
+                                                height: 32
+                                            }}
+                                            onDragStop={(e, d) => {
+                                                const newStart = Math.max(0, (d.x / trackWidth) * duration);
+                                                const dur = caption.end - caption.start;
+                                                onUpdateCaption && onUpdateCaption(caption.id, { start: newStart, end: newStart + dur });
+                                            }}
+                                            onResizeStop={(e, direction, ref, delta, position) => {
+                                                const newWidth = parseInt(ref.style.width);
+                                                const newLeft = (position.x / trackWidth) * duration;
+                                                const newWidthSec = (newWidth / trackWidth) * duration;
+                                                if (direction.includes('left')) {
+                                                    onUpdateCaption && onUpdateCaption(caption.id, { start: Math.max(0, newLeft) });
+                                                } else if (direction.includes('right')) {
+                                                    onUpdateCaption && onUpdateCaption(caption.id, { end: caption.start + newWidthSec });
+                                                }
+                                            }}
+                                            bounds="parent"
+                                            enableResizing={{ left: true, right: true, top: false, bottom: false }}
+                                            resizeHandleStyles={{
+                                                left: { width: '8px', cursor: 'ew-resize' },
+                                                right: { width: '8px', cursor: 'ew-resize' }
+                                            }}
+                                            dragAxis="x"
+                                            className="segment-rnd segment-caption"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onSeek && onSeek(caption.start);
+                                                onSelectCaption && onSelectCaption(caption.id);
+                                            }}
+                                            title={caption.text}
+                                        >
+                                            <div className="segment-content">
+                                                <Captions size={12} />
+                                                <span>{caption.text || 'Caption'}</span>
+                                            </div>
+                                        </Rnd>
+                                    );
+                                })}
+                            </div>
+                            <div className="track-label" style={{ opacity: 0 }}>
+                                <Scissors size={14} />
+                            </div>
+                        </div>
+                    )}
 
                     <button className="add-track-btn" onClick={() => onAddTrack && onAddTrack()}>
                         <Plus size={12} />

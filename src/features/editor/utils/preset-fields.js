@@ -40,6 +40,12 @@ export const PRESET_FIELDS = [
     { key: 'clickAnimationOpacity', setter: 'setClickAnimationOpacity' },
     { key: 'clickSound', setter: 'setClickSound' },
     { key: 'clickAnimationInRecording', setter: 'setClickAnimationInRecording' },
+    // Caption style (appearance only; caption content is per-recording)
+    { key: 'captionFontScale', setter: 'setCaptionFontScale' },
+    { key: 'captionFontFamily', setter: 'setCaptionFontFamily' },
+    { key: 'captionColor', setter: 'setCaptionColor' },
+    { key: 'captionBackground', setter: 'setCaptionBackground' },
+    { key: 'captionPosition', setter: 'setCaptionPosition' },
     // Audio
     { key: 'isMuted', setter: 'setIsMuted' },
     { key: 'volume', setter: 'setVolume' },

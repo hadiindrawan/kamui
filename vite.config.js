@@ -15,10 +15,6 @@ export default defineConfig({
         {
           src: 'public/icons',
           dest: '.'
-        },
-        {
-          src: 'public/ffmpeg',
-          dest: '.'
         }
       ]
     })

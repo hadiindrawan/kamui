@@ -16,6 +16,7 @@
  *     ctx.scale/translate around the whole composite.
  */
 
+import { captionAtTime, wrapCaptionText, resolveCaptionStyle, CAPTION_FONT_FAMILIES } from './captions.js';
 import { computeSceneLayout, mapVideoPointToScene } from './coordinates.js';
 import { drawClickAnimations, filterRapidClicks, ACCENT_RGB } from './click-animations.js';
 import { buildSmoothedCursorPath, sampleCursorPath, DEFAULT_CURSOR_SMOOTHING } from './cursor-smoothing.js';
@@ -308,6 +309,87 @@ export function drawSceneFrame(ctx, frameSource, timeMs, model, opts = {}) {
     drawSceneOverlays(ctx, timeMs, events, width, height, {
         showCursorHighlight, showClickAnimations, cursorScale,
         clickEvents, clickStyle, clickOpacity, cursorPath,
+    });
+
+    ctx.restore();
+
+    // Captions are drawn AFTER the camera transform is restored, so they sit in
+    // fixed scene/canvas space (bottom-centered) and never zoom/pan with the
+    // frame. `opts.captions` must be in the SAME time base as `timeMs` (the
+    // caller owns that: source time in preview, output-rebased in export).
+    if (opts.captions && opts.captions.length && opts.showCaptions !== false) {
+        drawCaptionOverlay(ctx, timeMs, opts.captions, width, height, opts.captionStyle);
+    }
+}
+
+/**
+ * Draw the active caption as word-wrapped, centered text. Appearance is driven
+ * by `style` (size scale, font family, color, background box/shadow/none,
+ * vertical position). Stateless — derived purely from captions + time + style,
+ * so preview and export render identically. `w`/`h` are the scene/canvas size.
+ */
+export function drawCaptionOverlay(ctx, timeMs, captions, w, h, style) {
+    const active = captionAtTime(captions, timeMs / 1000);
+    if (!active) return;
+    const text = (active.text || '').trim();
+    if (!text) return;
+
+    const { fontScale, fontFamily, color, background, position } = resolveCaptionStyle(style);
+    const family = CAPTION_FONT_FAMILIES[fontFamily] || CAPTION_FONT_FAMILIES.sans;
+    const fontSize = Math.max(10, Math.round(h * 0.045 * fontScale));
+    const lineHeight = fontSize * 1.3;
+    const pad = fontSize * 0.5;
+    const maxTextWidth = w * 0.8;
+
+    ctx.save();
+    ctx.font = `600 ${fontSize}px ${family}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+
+    const lines = wrapCaptionText(ctx, text, maxTextWidth);
+    if (!lines.length) { ctx.restore(); return; }
+
+    const textWidth = Math.min(
+        maxTextWidth,
+        lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0)
+    );
+    const boxWidth = textWidth + pad * 2;
+    const boxHeight = lines.length * lineHeight + pad * 2;
+    const boxX = (w - boxWidth) / 2;
+    const cx = w / 2;
+
+    // Vertical placement of the caption block.
+    let boxY;
+    if (position === 'top') {
+        boxY = h * 0.06;
+    } else if (position === 'middle') {
+        boxY = (h - boxHeight) / 2;
+    } else {
+        boxY = h - h * 0.06 - boxHeight;
+    }
+
+    if (background === 'box') {
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(boxX, boxY, boxWidth, boxHeight, fontSize * 0.3);
+            ctx.fill();
+        } else {
+            ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+        }
+    }
+
+    // With no solid box, a drop shadow keeps text legible over any frame.
+    if (background === 'shadow') {
+        ctx.shadowColor = 'rgba(0,0,0,0.9)';
+        ctx.shadowBlur = Math.max(2, fontSize * 0.25);
+        ctx.shadowOffsetY = Math.max(1, fontSize * 0.06);
+    }
+
+    ctx.fillStyle = color || '#ffffff';
+    lines.forEach((line, i) => {
+        const baseline = boxY + pad + (i + 1) * lineHeight - lineHeight * 0.25;
+        ctx.fillText(line, cx, baseline);
     });
 
     ctx.restore();

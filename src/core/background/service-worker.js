@@ -7,10 +7,11 @@ const log = createLogger('SW');
 
 // ─── Native Bridge (inlined — MV3 service workers don't support dynamic import()) ───
 
-const NATIVE_HOST_NAME = 'com.beunta.native';
+const NATIVE_HOST_NAME = 'com.kamui.native';
 let nativePort = null;
 let nativeBridgeReconnectAttempts = 0;
-const NATIVE_RECONNECT_DELAY_MS = 2000;
+const NATIVE_RECONNECT_BASE_DELAY_MS = 2000;
+const NATIVE_RECONNECT_MAX_DELAY_MS = 60000;
 
 const nativeListeners = new Map();
 
@@ -48,6 +49,12 @@ function nativeBridgeConnect() {
 
     nativePort.onMessage.addListener((message) => {
         log.debug('\u2190 Native message received:', message.type, message);
+
+        // Any message from the native app is proof the connection is truly
+        // alive (unlike a successful connectNative() call, which resolves
+        // synchronously even for a host that turns out to be unreachable) \u2014
+        // reset backoff here, not right after connecting.
+        nativeBridgeReconnectAttempts = 0;
 
         // TRACKING_STOPPED arrives both as a reply to our own STOP_TRACKING and
         // unprompted from a tray "Stop Recording" click. finishNativeRecording()
@@ -166,17 +173,24 @@ function nativeBridgeConnect() {
         }
         // The connection is meant to be permanent (it's what keeps the
         // branded tray icon present even when nothing is recording), so keep
-        // retrying indefinitely rather than giving up after a few attempts.
-        // If the companion app was never installed at all, connectNative()
-        // above throws synchronously instead of reaching this handler, so
-        // this loop only runs when a previously-working connection dropped
-        // (app crashed/updated) — not against a permanently-absent host.
+        // retrying rather than giving up after a few attempts — but back off
+        // exponentially (capped at NATIVE_RECONNECT_MAX_DELAY_MS) so a
+        // permanently-absent host (never installed, or renamed — as when the
+        // extension's requested host name changes but a stale dist/ build is
+        // still loaded) doesn't hammer connectNative() at a fixed interval
+        // forever. Note connectNative() does NOT throw synchronously for a
+        // missing host: Chrome always resolves the port object immediately,
+        // and "Specified native messaging host not found" only surfaces here,
+        // asynchronously, via onDisconnect.
         nativeBridgeReconnectAttempts++;
-        log.info(`Reconnect attempt ${nativeBridgeReconnectAttempts} in ${NATIVE_RECONNECT_DELAY_MS}ms`);
-        setTimeout(() => nativeBridgeConnect(), NATIVE_RECONNECT_DELAY_MS);
+        const delay = Math.min(
+            NATIVE_RECONNECT_BASE_DELAY_MS * 2 ** (nativeBridgeReconnectAttempts - 1),
+            NATIVE_RECONNECT_MAX_DELAY_MS,
+        );
+        log.info(`Reconnect attempt ${nativeBridgeReconnectAttempts} in ${delay}ms`);
+        setTimeout(() => nativeBridgeConnect(), delay);
     });
 
-    nativeBridgeReconnectAttempts = 0;
     sendAppStateToNative();
     sendPresetListToNative();
     return nativePort;
@@ -240,24 +254,35 @@ function nativeBridgeOffMessage(type) {
     nativeListeners.delete(type);
 }
 
+/** PINGs the native app over the existing persistent bridge rather than
+ * opening a second connectNative() port. Chrome launches a fresh native-host
+ * process per port, and the companion app spins up a full GUI (tray + global
+ * hotkey) per process, so a throwaway port here used to double-launch it on
+ * every availability check ("Check Connection" clicks, popup opens, etc.). */
 async function checkNativeAppAvailable() {
-    let port = null;
-    try {
-        port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-        const result = await new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve(false), 2000);
-            port.onMessage.addListener((msg) => {
-                if (msg.type === 'PONG') { clearTimeout(timeout); resolve(true); }
-            });
-            port.onDisconnect.addListener(() => { clearTimeout(timeout); resolve(false); });
-            port.postMessage({ type: 'PING' });
+    if (!nativePort) nativeBridgeConnect();
+    if (!nativePort) return false;
+
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            nativeBridgeOffMessage('PONG');
+            resolve(result);
+        };
+        const timeout = setTimeout(() => finish(false), 2000);
+        nativeBridgeOnMessage('PONG', () => {
+            clearTimeout(timeout);
+            finish(true);
         });
-        port.disconnect();
-        return result;
-    } catch {
-        if (port) try { port.disconnect(); } catch { /* ignore */ }
-        return false;
-    }
+        try {
+            nativeBridgeSend({ type: 'PING' });
+        } catch {
+            clearTimeout(timeout);
+            finish(false);
+        }
+    });
 }
 
 // ─── Recording State ───

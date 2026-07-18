@@ -40,7 +40,10 @@ const CanvasPlayer = forwardRef(({
     volume = 1,
     clickAnimationStyle = 'ripple',
     clickAnimationOpacity = 'med',
-    clickSound = 'none'
+    clickSound = 'none',
+    captions = [],
+    showCaptions = true,
+    captionStyle = null
 }, ref) => {
     const canvasRef = useRef(null);
     const videoRefs = useRef([]);
@@ -300,6 +303,7 @@ const CanvasPlayer = forwardRef(({
         backgroundValue, backgroundBlur,
         insetPadding, cropToFill, cropPanX, cropPanY, cropZoom, showShadow, showBorder, borderRadius, metadataReady,
         clickAnimationStyle, clickAnimationOpacity,
+        captions, showCaptions, captionStyle,
         sceneModel
     ]);
 
@@ -522,6 +526,9 @@ const CanvasPlayer = forwardRef(({
             showCursorHighlight: true,
             clickStyle: clickAnimationStyle,
             clickOpacity: clickAnimationOpacity,
+            captions,
+            showCaptions,
+            captionStyle,
         });
     }
 

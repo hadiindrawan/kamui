@@ -3,6 +3,7 @@ import { computeSceneLayout, mapSceneRectToContainer, computeCoverVideoRect } fr
 import { generateAutoZoomSegments, resolveIntensity } from '../utils/auto-zoom.js';
 import { capturePresetSettings, applyPresetSettings } from '../utils/preset-fields.js';
 import { DEFAULT_CURSOR_SMOOTHING } from '../utils/cursor-smoothing.js';
+import { createCaption, sortCaptions, DEFAULT_CAPTION_STYLE } from '../utils/captions.js';
 import { useToast } from '../../../shared/hooks/useToast.js';
 import { formatTime as formatTimeWithPrecision } from '../utils/time.js';
 
@@ -157,6 +158,20 @@ export function useEditorState() {
     const [trimEnd, setTrimEnd] = useState(0);
     const [confirmResetOpen, setConfirmResetOpen] = useState(false);
 
+    // Captions: per-recording transcript data (source-time seconds). Not part
+    // of presets. `captionsEnabled`/`burnInCaptions` are per-recording UI flags.
+    const [captions, setCaptions] = useState([]);
+    const [captionsEnabled, setCaptionsEnabled] = useState(true);
+    const [burnInCaptions, setBurnInCaptions] = useState(false);
+
+    // Caption appearance is a cross-recording style preference (captured by
+    // presets, like clickAnimationStyle), separate from the caption content.
+    const [captionFontScale, setCaptionFontScale] = useState(DEFAULT_CAPTION_STYLE.fontScale);
+    const [captionFontFamily, setCaptionFontFamily] = useState(DEFAULT_CAPTION_STYLE.fontFamily);
+    const [captionColor, setCaptionColor] = useState(DEFAULT_CAPTION_STYLE.color);
+    const [captionBackground, setCaptionBackground] = useState(DEFAULT_CAPTION_STYLE.background);
+    const [captionPosition, setCaptionPosition] = useState(DEFAULT_CAPTION_STYLE.position);
+
     const [segments, setSegments] = useState([]);
     const [tracks, setTracks] = useState([{ id: 0, label: 'Track 1' }]);
     const [loopPlayback, setLoopPlayback] = useState(false);
@@ -183,7 +198,18 @@ export function useEditorState() {
         setShowFollowCursor, setCursorSmoothing, setIsMuted, setVolume,
         setClickAnimationStyle, setClickAnimationOpacity, setClickSound, setClickAnimationInRecording,
         setExportResolution, setExportFps, setExportFormat, setConversionService,
+        setCaptionFontScale, setCaptionFontFamily, setCaptionColor, setCaptionBackground, setCaptionPosition,
     }), []);
+
+    // Bundle the caption style pieces for the renderer/export (stable identity
+    // while the individual values are unchanged).
+    const captionStyle = useMemo(() => ({
+        fontScale: captionFontScale,
+        fontFamily: captionFontFamily,
+        color: captionColor,
+        background: captionBackground,
+        position: captionPosition,
+    }), [captionFontScale, captionFontFamily, captionColor, captionBackground, captionPosition]);
 
     const saveHistory = useCallback((newSegments) => {
         const newHistory = history.slice(0, historyIndex + 1);
@@ -224,6 +250,10 @@ export function useEditorState() {
 
             setRecording(rec);
 
+            if (Array.isArray(rec.captions)) {
+                setCaptions(sortCaptions(rec.captions));
+            }
+
             if (rec.segments && rec.segments.length > 0) {
                 const segmentsWithZoom = rec.segments.map((seg) => ({
                     ...seg,
@@ -247,6 +277,8 @@ export function useEditorState() {
                 if (s.trimStart !== undefined) setTrimStart(s.trimStart);
                 if (s.trimEnd !== undefined) setTrimEnd(s.trimEnd);
                 if (s.loopPlayback !== undefined) setLoopPlayback(s.loopPlayback);
+                if (s.captionsEnabled !== undefined) setCaptionsEnabled(s.captionsEnabled);
+                if (s.burnInCaptions !== undefined) setBurnInCaptions(s.burnInCaptions);
             }
             setLoading(false);
         } catch (err) {
@@ -477,6 +509,51 @@ export function useEditorState() {
         saveHistory(merged);
     }, [recording, segments, buildAutoZoomSegments, saveHistory]);
 
+    // --- Caption CRUD (source-time seconds; keeps the list sorted) ---
+    const clampCaptionTimes = useCallback((start, end) => {
+        const max = duration || Math.max(start, end);
+        const s = Math.max(0, Math.min(start, max));
+        const e = Math.max(s + 0.1, Math.min(end, max || end));
+        return { start: s, end: e };
+    }, [duration]);
+
+    const addCaptionAtPlayhead = useCallback(() => {
+        const start = currentTime;
+        const end = Math.min((duration || start + 2), start + 2);
+        const caption = createCaption({ start, end, text: 'New caption' });
+        setCaptions((prev) => sortCaptions([...prev, caption]));
+        setHasPendingEdits(true);
+        return caption.id;
+    }, [currentTime, duration]);
+
+    const updateCaption = useCallback((id, updates) => {
+        setCaptions((prev) => sortCaptions(prev.map((c) => {
+            if (c.id !== id) return c;
+            const next = { ...c, ...updates };
+            if (updates.start !== undefined || updates.end !== undefined) {
+                const { start, end } = clampCaptionTimes(
+                    updates.start !== undefined ? updates.start : c.start,
+                    updates.end !== undefined ? updates.end : c.end,
+                );
+                next.start = start;
+                next.end = end;
+            }
+            return next;
+        })));
+        setHasPendingEdits(true);
+    }, [clampCaptionTimes]);
+
+    const deleteCaption = useCallback((id) => {
+        setCaptions((prev) => prev.filter((c) => c.id !== id));
+        setHasPendingEdits(true);
+    }, []);
+
+    const setAllCaptions = useCallback((list) => {
+        const normalized = sortCaptions((list || []).map((c) => createCaption(c)));
+        setCaptions(normalized);
+        setHasPendingEdits(true);
+    }, []);
+
     const handleSaveChanges = useCallback(async () => {
         setSavedSegments([...segments]);
         setHasPendingEdits(false);
@@ -488,6 +565,8 @@ export function useEditorState() {
                 const { updateRecording } = await import('../../../storage/indexeddb.js');
                 await updateRecording(recordingId, {
                     segments,
+                    // Per-recording transcript data, sibling of `segments`.
+                    captions,
                     editorSettings: {
                         // Shared preset fields (single source of truth).
                         ...capturePresetSettings({
@@ -504,6 +583,8 @@ export function useEditorState() {
                         trimEnd,
                         tracks,
                         loopPlayback,
+                        captionsEnabled,
+                        burnInCaptions,
                     },
                 });
             }
@@ -512,7 +593,7 @@ export function useEditorState() {
         }
 
         canvasPlayerRef.current?.seekTo(currentTime);
-    }, [segments, currentTime, zoomLevel, zoomDuration, transitionDuration, autoZoomIntensity, playbackSpeed, aspectRatio,
+    }, [segments, captions, captionsEnabled, burnInCaptions, currentTime, zoomLevel, zoomDuration, transitionDuration, autoZoomIntensity, playbackSpeed, aspectRatio,
         backgroundMode, backgroundColor, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
         showShadow, showBorder, borderRadius, isMuted, volume, showFollowCursor, cursorSmoothing,
         clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording,
@@ -560,6 +641,7 @@ export function useEditorState() {
                 {
                     ...merged,
                     segments, trimStart, trimEnd,
+                    captions, burnInCaptions, captionStyle,
                     targetResolution: preset.resolution,
                     fps: merged.exportFps, format: merged.exportFormat,
                     exportQuality: merged.exportQuality || 'best',
@@ -580,7 +662,8 @@ export function useEditorState() {
         isMuted, volume, exportResolution, exportFps, exportFormat, conversionService, exportQuality, aspectRatio, backgroundColor,
         backgroundMode, backgroundValue, backgroundBlur, insetPadding, cropToFill, cropPanX, cropPanY, cropZoom,
         showShadow, showBorder, borderRadius, showFollowCursor, cursorSmoothing,
-        clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording, showToast]);
+        clickAnimationStyle, clickAnimationOpacity, clickSound, clickAnimationInRecording,
+        captions, burnInCaptions, captionStyle, showToast]);
 
     // Keyboard shortcuts
     useEffect(() => {
@@ -783,6 +866,14 @@ export function useEditorState() {
         clickSound, setClickSound, clickAnimationInRecording, setClickAnimationInRecording,
         // trim
         trimStart, setTrimStart, trimEnd, setTrimEnd, handleTrimChange, markTrimStart, markTrimEnd,
+        // captions
+        captions, captionsEnabled, setCaptionsEnabled, burnInCaptions, setBurnInCaptions,
+        addCaptionAtPlayhead, updateCaption, deleteCaption, setAllCaptions,
+        // caption style
+        captionStyle,
+        captionFontScale, setCaptionFontScale, captionFontFamily, setCaptionFontFamily,
+        captionColor, setCaptionColor, captionBackground, setCaptionBackground,
+        captionPosition, setCaptionPosition,
         // segments + history
         segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
         requestResetTimeline, performResetTimeline, confirmResetOpen, setConfirmResetOpen, handleUndo, handleRedo, saveHistory,

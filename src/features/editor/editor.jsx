@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Film, HardDrive, Settings, ZoomIn, Crop, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Film, HardDrive, Settings, ZoomIn, Crop, ChevronsLeft, ChevronsRight, Captions } from 'lucide-react';
 import CanvasPlayer from './components/CanvasPlayer.jsx';
 import Timeline from './components/Timeline.jsx';
 import EditorToolbar from './components/EditorToolbar.jsx';
 import SidebarSettings from './components/SidebarSettings.jsx';
 import SegmentInspector from './components/SegmentInspector.jsx';
 import FramingPanel from './components/FramingPanel.jsx';
+import CaptionsPanel from './components/CaptionsPanel.jsx';
 import ExportPanel from './components/ExportPanel.jsx';
 import ZoomTargetOverlay from './components/ZoomTargetOverlay.jsx';
 import CropPanOverlay from './components/CropPanOverlay.jsx';
@@ -21,7 +22,7 @@ import Tabs from '../../shared/components/Tabs.jsx';
 import Button from '../../shared/components/Button.jsx';
 import './editor.css';
 
-const SIDEBAR_COLLAPSED_KEY = 'beunta.sidebarCollapsed';
+const SIDEBAR_COLLAPSED_KEY = 'kamui.sidebarCollapsed';
 
 export default function Editor() {
     return (
@@ -52,6 +53,12 @@ function EditorContent() {
         clickAnimationStyle, setClickAnimationStyle, clickAnimationOpacity, setClickAnimationOpacity,
         clickSound, setClickSound, clickAnimationInRecording, setClickAnimationInRecording,
         trimStart, trimEnd, markTrimStart, markTrimEnd,
+        captions, captionsEnabled, setCaptionsEnabled, burnInCaptions, setBurnInCaptions,
+        addCaptionAtPlayhead, updateCaption, deleteCaption, setAllCaptions,
+        captionStyle,
+        captionFontScale, setCaptionFontScale, captionFontFamily, setCaptionFontFamily,
+        captionColor, setCaptionColor, captionBackground, setCaptionBackground,
+        captionPosition, setCaptionPosition,
         segments, selectedSegmentId, setSelectedSegmentId, selectSegment, addSegment, updateSegment, deleteSegment,
         requestResetTimeline, performResetTimeline, confirmResetOpen, setConfirmResetOpen,
         handleUndo, handleRedo, saveHistory, handleTrimChange,
@@ -125,6 +132,7 @@ function EditorContent() {
         }] : []),
         { id: 'video', label: 'Video', icon: <Settings size={14} /> },
         { id: 'frame', label: 'Frame', icon: <Film size={14} /> },
+        { id: 'captions', label: 'Captions', icon: <Captions size={14} /> },
     ];
 
     const urlParams = new URLSearchParams(window.location.search);
@@ -146,7 +154,7 @@ function EditorContent() {
                     <div className="header-left">
                         <h1 className="header-title">
                             <Film size={22} />
-                            Beunta Editor
+                            Kamui Editor
                         </h1>
                     </div>
                 </header>
@@ -260,6 +268,9 @@ function EditorContent() {
                             clickAnimationStyle={clickAnimationStyle}
                             clickAnimationOpacity={clickAnimationOpacity}
                             clickSound={clickSound}
+                            captions={captions}
+                            showCaptions={captionsEnabled}
+                            captionStyle={captionStyle}
                             onTimeUpdate={handleTimeUpdate}
                             onPlaybackEnded={handlePlaybackEnded}
                             onFrameTime={handleFrameTime}
@@ -381,6 +392,35 @@ function EditorContent() {
                                     setHasPendingEdits={setHasPendingEdits}
                                 />
                             )}
+                            {sidebarTab === 'captions' && (
+                                <CaptionsPanel
+                                    recording={recording}
+                                    captions={captions}
+                                    captionsEnabled={captionsEnabled}
+                                    setCaptionsEnabled={setCaptionsEnabled}
+                                    burnInCaptions={burnInCaptions}
+                                    setBurnInCaptions={setBurnInCaptions}
+                                    addCaptionAtPlayhead={addCaptionAtPlayhead}
+                                    updateCaption={updateCaption}
+                                    deleteCaption={deleteCaption}
+                                    setAllCaptions={setAllCaptions}
+                                    duration={duration}
+                                    trimStart={trimStart}
+                                    trimEnd={trimEnd}
+                                    onSeek={handleSeek}
+                                    setHasPendingEdits={setHasPendingEdits}
+                                    captionFontScale={captionFontScale}
+                                    setCaptionFontScale={setCaptionFontScale}
+                                    captionFontFamily={captionFontFamily}
+                                    setCaptionFontFamily={setCaptionFontFamily}
+                                    captionColor={captionColor}
+                                    setCaptionColor={setCaptionColor}
+                                    captionBackground={captionBackground}
+                                    setCaptionBackground={setCaptionBackground}
+                                    captionPosition={captionPosition}
+                                    setCaptionPosition={setCaptionPosition}
+                                />
+                            )}
                         </div>
                     )}
                 </aside>
@@ -407,6 +447,9 @@ function EditorContent() {
                     onTrimChange={handleTrimChange}
                     onUndo={handleUndo}
                     onRedo={handleRedo}
+                    captions={captionsEnabled ? captions : []}
+                    onUpdateCaption={updateCaption}
+                    onSelectCaption={(id) => { if (id) { setSidebarTab('captions'); setSidebarCollapsed(false); } }}
                 />
             </div>
 

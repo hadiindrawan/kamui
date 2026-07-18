@@ -1,12 +1,12 @@
 /**
- * Native host manifest utilities for Beunta native companion app.
+ * Native host manifest utilities for Kamui native companion app.
  *
  * The native host manifest must be installed at a platform-specific path
  * by the installer (.pkg on macOS, .msi on Windows) so Chrome can discover
  * the native app via NativeMessaging.
  */
 
-export const NATIVE_HOST_NAME = 'com.beunta.native';
+export const NATIVE_HOST_NAME = 'com.kamui.native';
 
 /**
  * Generate the native host manifest JSON.
@@ -19,7 +19,7 @@ export const NATIVE_HOST_NAME = 'com.beunta.native';
 export function generateHostManifest(executablePath) {
     return {
         name: NATIVE_HOST_NAME,
-        description: 'Beunta native input tracker — streams global cursor position and clicks so auto-zoom works for full-desktop recordings.',
+        description: 'Kamui native input tracker — streams global cursor position and clicks so auto-zoom works for full-desktop recordings.',
         path: executablePath,
         type: 'stdio',
         allowed_origins: ['chrome-extension://__EXTENSION_ID__/']
@@ -53,6 +53,6 @@ export const MANIFEST_PATHS = {
  * Default install paths for the native app binary.
  */
 export const BINARY_PATHS = {
-    darwin: '/Applications/Beunta Native.app/Contents/MacOS/beunta-native',
-    win32: '%LOCALAPPDATA%\\Beunta\\beunta-native.exe',
+    darwin: '/Applications/Kamui Native.app/Contents/MacOS/kamui-native',
+    win32: '%LOCALAPPDATA%\\Kamui\\kamui-native.exe',
 };

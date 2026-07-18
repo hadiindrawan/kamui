@@ -1,5 +1,5 @@
 /**
- * API Client for Beunta Backend
+ * API Client for Kamui Backend
  * Handles communication with the video conversion backend service
  */
 
@@ -90,6 +90,40 @@ export class ConversionAPI {
         const data = await response.json();
         console.log('[API] Upload successful, task ID:', data.id);
         return data;
+    }
+
+    /**
+     * Transcribe an audio blob into caption segments.
+     * @param {Blob} audioBlob - Audio file (wav/mp3/m4a/ogg/webm)
+     * @param {Object} [opts]
+     * @param {string} [opts.filename] - Filename hint sent with the upload
+     * @param {string} [opts.language] - Optional ISO language hint (e.g. 'en')
+     * @returns {Promise<Array<{start:number,end:number,text:string}>>} segments
+     */
+    async transcribeAudio(audioBlob, { filename = 'audio.wav', language = null } = {}) {
+        const formData = new FormData();
+        formData.append('file', audioBlob, filename);
+        if (language) {
+            formData.append('language', language);
+        }
+
+        const response = await this.fetchWithTimeout(
+            `${this.baseURL}/api/v1/transcriptions`,
+            { method: 'POST', body: formData },
+            this.timeout
+        );
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new APIError(
+                error.message || 'Failed to transcribe audio',
+                response.status,
+                error.details
+            );
+        }
+
+        const data = await response.json();
+        return data.segments || [];
     }
 
     /**
@@ -236,7 +270,19 @@ export class ConversionAPI {
     }
 
     /**
-     * Fetch with timeout
+     * Build request headers, adding the API key when configured.
+     * @private
+     */
+    buildHeaders(extra = {}) {
+        const headers = { ...extra };
+        if (config.backend.apiKey) {
+            headers['X-API-Key'] = config.backend.apiKey;
+        }
+        return headers;
+    }
+
+    /**
+     * Fetch with timeout. Injects auth headers unless the caller overrides them.
      * @private
      */
     async fetchWithTimeout(url, options = {}, timeout = 30000) {
@@ -246,6 +292,7 @@ export class ConversionAPI {
         try {
             const response = await fetch(url, {
                 ...options,
+                headers: this.buildHeaders(options.headers),
                 signal: controller.signal
             });
             clearTimeout(timeoutId);

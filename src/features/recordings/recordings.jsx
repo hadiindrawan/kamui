@@ -21,7 +21,7 @@ export default function Recordings() {
             <header className="recordings-header">
                 <div className="recordings-header-logo">
                     <Video size={24} />
-                    <h1>Beunta Recordings</h1>
+                    <h1>Kamui Recordings</h1>
                 </div>
             </header>
 

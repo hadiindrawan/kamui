@@ -9,6 +9,8 @@ import {
     computeAudioBitrate,
     SIZE_BUDGET_BYTES_PER_MIN,
 } from './export-codec.js';
+import { downloadBlob } from './download.js';
+import { mapCaptionsToOutputTime } from './captions.js';
 
 export async function exportVideoMP4(recording, settings, onProgress) {
     const { conversionService = 'local', format = 'mp4' } = settings;
@@ -40,7 +42,7 @@ export async function exportVideoMP4(recording, settings, onProgress) {
     onProgress(100);
 
     const extension = format === 'webm' ? 'webm' : 'mp4';
-    downloadBlob(blob, `beunta_${Date.now()}.${extension}`);
+    downloadBlob(blob, `kamui_${Date.now()}.${extension}`);
 
     // Non-blocking size validation: the download already happened. Surface a
     // warning if the file exceeds the 100MB/min budget (or carry over the
@@ -68,17 +70,6 @@ export async function exportVideo(recording, onProgress) {
         transitionDuration: 600,
         segments: []
     }, onProgress);
-}
-
-function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /**
@@ -130,6 +121,12 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     const trimStartSec = settings.trimStart || 0;
     const trimEndSec = settings.trimEnd || sourceDuration;
     const durationSec = Math.max(0, Math.min(trimEndSec, sourceDuration) - trimStartSec);
+
+    // Captions to burn in, rebased to output (trimmed, 0-based) time — which is
+    // exactly what mediabunny hands processFrame via `sample.timestamp`.
+    const exportCaptions = settings.burnInCaptions
+        ? mapCaptionsToOutputTime(settings.captions || [], trimStartSec, trimEndSec)
+        : [];
 
     // Build the SAME scene model the live preview uses, so the export is a
     // faithful reproduction. All cropping/zoom/framing geometry happens in
@@ -222,6 +219,9 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
             showClickAnimations: settings.clickAnimationInRecording !== false,
             clickStyle: settings.clickAnimationStyle,
             clickOpacity: settings.clickAnimationOpacity,
+            captions: exportCaptions,
+            showCaptions: exportCaptions.length > 0,
+            captionStyle: settings.captionStyle,
         });
         ctx.restore();
 

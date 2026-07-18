@@ -58,7 +58,7 @@ export default function Popup() {
             <header className="header">
                 <div className="header-logo">
                     <Video size={24} />
-                    <h1>Beunta</h1>
+                    <h1>Kamui</h1>
                 </div>
                 <p className="subtitle">Smart Screen Recorder</p>
             </header>
@@ -88,7 +88,7 @@ export default function Popup() {
                 {/* While probing, show a stable placeholder (same height as the
                     hint) so the setup guide never flashes during the switch. */}
                 {recordingMode === 'native' && (nativeAvailability === 'checking' || nativeAvailability === 'unknown') && (
-                    <p className="mode-hint">Checking for Beunta helper…</p>
+                    <p className="mode-hint">Checking for Kamui helper…</p>
                 )}
 
                 {/* Native Setup Guide — only on a confirmed-unavailable result. */}

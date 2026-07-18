@@ -3,7 +3,7 @@ import { Film, Monitor, Youtube, Smartphone, Square, Instagram } from 'lucide-re
 
 // Solid quick-picks tuned for content: near-black/white for a clean studio
 // look, plus a couple of muted creator-friendly tones. The lavender swatch
-// doubles as an on-brand option for Beunta-made content.
+// doubles as an on-brand option for Kamui-made content.
 const COLOR_PRESETS = ['#010102', '#ffffff', '#1a1a2e', '#16161d', '#5e6ad2', '#233d4d'];
 
 const GRADIENT_PRESETS = [

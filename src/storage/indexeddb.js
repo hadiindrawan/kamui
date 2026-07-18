@@ -1,33 +1,85 @@
 import { openDB } from 'idb';
 
-const DB_NAME = 'BeuntaRecordings';
+const DB_NAME = 'KamuiRecordings';
+const LEGACY_DB_NAME = 'BeuntaRecordings'; // pre-rebrand name — see migrateLegacyDatabase()
 const DB_VERSION = 4;
 const STORE_NAME = 'recordings';
 const CHUNKS_STORE = 'chunks';
 const EVENT_LOGS_STORE = 'event_logs';
 const PRESETS_STORE = 'presets';
 
+function createStores(db) {
+    if (!db.objectStoreNames.contains(STORE_NAME)) {
+        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        store.createIndex('startTime', 'startTime');
+    }
+    if (!db.objectStoreNames.contains(CHUNKS_STORE)) {
+        const chunkStore = db.createObjectStore(CHUNKS_STORE, { autoIncrement: true });
+        chunkStore.createIndex('sessionId', 'sessionId');
+    }
+    if (!db.objectStoreNames.contains(EVENT_LOGS_STORE)) {
+        const eventStore = db.createObjectStore(EVENT_LOGS_STORE, { autoIncrement: true });
+        eventStore.createIndex('sessionId', 'sessionId');
+    }
+    if (!db.objectStoreNames.contains(PRESETS_STORE)) {
+        db.createObjectStore(PRESETS_STORE, { keyPath: 'id' });
+    }
+}
+
+// Cached across calls so the migration only runs once per service-worker
+// lifetime (it's also self-terminating: once the legacy DB is deleted,
+// indexedDB.databases() no longer lists it, so later SW restarts skip it).
+let migrationPromise = null;
+
+/** One-time migration from the pre-rebrand 'BeuntaRecordings' database to
+ * 'KamuiRecordings' so existing local recordings/presets aren't orphaned by
+ * the rename. Copies every object store's contents, then deletes the legacy
+ * database. Best-effort: a failure here must not block the app from using
+ * the new (possibly empty) database. */
+async function migrateLegacyDatabase() {
+    if (migrationPromise) return migrationPromise;
+    migrationPromise = (async () => {
+        if (!('databases' in indexedDB)) return; // can't enumerate — skip detection
+        const existing = await indexedDB.databases();
+        if (!existing.some((d) => d.name === LEGACY_DB_NAME)) return;
+
+        // No explicit version — open at whatever version the legacy DB is
+        // already at, so this read-only copy can't trigger a schema upgrade.
+        const legacyDb = await openDB(LEGACY_DB_NAME);
+        const newDb = await openDB(DB_NAME, DB_VERSION, { upgrade: createStores });
+
+        for (const storeName of [STORE_NAME, CHUNKS_STORE, EVENT_LOGS_STORE, PRESETS_STORE]) {
+            if (!legacyDb.objectStoreNames.contains(storeName)) continue;
+            const tx = newDb.transaction(storeName, 'readwrite');
+            let cursor = await legacyDb.transaction(storeName).store.openCursor();
+            while (cursor) {
+                // autoIncrement stores (chunks/event_logs) have no keyPath in
+                // the value, so re-add to let the new DB assign fresh keys;
+                // sessionId references inside the value are untouched, so
+                // relationships to their parent recording still resolve.
+                if (storeName === CHUNKS_STORE || storeName === EVENT_LOGS_STORE) {
+                    await tx.store.add(cursor.value);
+                } else {
+                    await tx.store.put(cursor.value);
+                }
+                cursor = await cursor.continue();
+            }
+            await tx.done;
+        }
+
+        legacyDb.close();
+        newDb.close();
+        await indexedDB.deleteDatabase(LEGACY_DB_NAME);
+    })().catch((e) => {
+        console.error('[KamuiRecordings] Legacy DB migration failed (continuing with new DB):', e);
+    });
+    return migrationPromise;
+}
+
 // Initialize database
 export async function initDB() {
-    return openDB(DB_NAME, DB_VERSION, {
-        upgrade(db) {
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-                store.createIndex('startTime', 'startTime');
-            }
-            if (!db.objectStoreNames.contains(CHUNKS_STORE)) {
-                const chunkStore = db.createObjectStore(CHUNKS_STORE, { autoIncrement: true });
-                chunkStore.createIndex('sessionId', 'sessionId');
-            }
-            if (!db.objectStoreNames.contains(EVENT_LOGS_STORE)) {
-                const eventStore = db.createObjectStore(EVENT_LOGS_STORE, { autoIncrement: true });
-                eventStore.createIndex('sessionId', 'sessionId');
-            }
-            if (!db.objectStoreNames.contains(PRESETS_STORE)) {
-                db.createObjectStore(PRESETS_STORE, { keyPath: 'id' });
-            }
-        }
-    });
+    await migrateLegacyDatabase();
+    return openDB(DB_NAME, DB_VERSION, { upgrade: createStores });
 }
 
 // Save a chunk of video data

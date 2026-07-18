@@ -1,8 +1,8 @@
 /**
- * Type definitions for the NativeMessaging protocol between the Beunta
- * extension and the native input tracker (beunta-native). Documentation
+ * Type definitions for the NativeMessaging protocol between the Kamui
+ * extension and the native input tracker (kamui-native). Documentation
  * only — not enforced at runtime. Must stay in sync with
- * beunta-native/src/config.rs.
+ * kamui-native/src/config.rs.
  *
  * The native app never captures or encodes video — the browser does that
  * via getDisplayMedia. Its only job is streaming global cursor position and

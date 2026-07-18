@@ -211,3 +211,98 @@ describe('drawSceneFrame — cursor highlight (smoothed vs raw)', () => {
         expect(outer[1]).toBeCloseTo(0.8 * sceneH, 3);
     });
 });
+
+describe('drawSceneFrame — caption overlay', () => {
+    // Richer ctx spy that records fillText + font + box fills.
+    function makeCaptionCtx() {
+        const fillTexts = [];
+        const calls = { roundRect: 0, fillRect: 0 };
+        let font = '';
+        let lastFillStyle = '';
+        const fillStyles = [];
+        const ctx = {
+            canvas: { width: 0, height: 0 },
+            save() {}, restore() {}, clearRect() {},
+            beginPath() {}, roundRect() { calls.roundRect++; }, clip() {}, fill() {}, stroke() {},
+            fillRect() { calls.fillRect++; }, strokeRect() {},
+            arc() {}, createRadialGradient() { return { addColorStop() {} }; },
+            measureText(s) { return { width: s.length * 10 }; },
+            fillText(text, x, y) { fillTexts.push({ text, x, y, font, fillStyle: lastFillStyle }); },
+            set fillStyle(v) { lastFillStyle = v; fillStyles.push(v); }, get fillStyle() { return lastFillStyle; },
+            set strokeStyle(_) {}, get strokeStyle() { return ''; },
+            set lineWidth(_) {}, get lineWidth() { return 0; },
+            set font(v) { font = v; }, get font() { return font; },
+            set textAlign(_) {}, set textBaseline(_) {},
+            set shadowColor(_) {}, set shadowBlur(_) {}, set shadowOffsetY(_) {},
+            scale() {}, translate() {}, drawImage() {},
+        };
+        return { ctx, fillTexts, calls, fillStyles };
+    }
+
+    const fontPx = (f) => parseInt(/([0-9]+)px/.exec(f)?.[1] || '0', 10);
+
+    const model = buildSceneModel({ videoWidth: 1920, videoHeight: 1080, settings: baseSettings, segments: [] });
+    const source = { width: 1920, height: 1080 };
+    const caption = { id: 'a', start: 1, end: 3, text: 'Hello world' };
+
+    it('draws the active caption text', () => {
+        const { ctx, fillTexts } = makeCaptionCtx();
+        drawSceneFrame(ctx, source, 2000, model, {
+            camera: { srcX: 0, srcY: 0, srcW: 1080, srcH: 1920 },
+            backgroundMode: 'hidden', captions: [caption], showCaptions: true,
+        });
+        expect(fillTexts.some((f) => f.text === 'Hello world')).toBe(true);
+    });
+
+    it('draws nothing when no caption is active at the current time', () => {
+        const { ctx, fillTexts } = makeCaptionCtx();
+        drawSceneFrame(ctx, source, 5000, model, {
+            camera: { srcX: 0, srcY: 0, srcW: 1080, srcH: 1920 },
+            backgroundMode: 'hidden', captions: [caption], showCaptions: true,
+        });
+        expect(fillTexts).toHaveLength(0);
+    });
+
+    it('respects showCaptions=false', () => {
+        const { ctx, fillTexts } = makeCaptionCtx();
+        drawSceneFrame(ctx, source, 2000, model, {
+            camera: { srcX: 0, srcY: 0, srcW: 1080, srcH: 1920 },
+            backgroundMode: 'hidden', captions: [caption], showCaptions: false,
+        });
+        expect(fillTexts).toHaveLength(0);
+    });
+
+    const drawWithStyle = (style) => {
+        const spy = makeCaptionCtx();
+        drawSceneFrame(spy.ctx, source, 2000, model, {
+            camera: { srcX: 0, srcY: 0, srcW: 1080, srcH: 1920 },
+            backgroundMode: 'hidden', captions: [caption], showCaptions: true,
+            captionStyle: style,
+        });
+        return spy;
+    };
+
+    it('scales font size with fontScale', () => {
+        const small = drawWithStyle({ fontScale: 0.5 });
+        const large = drawWithStyle({ fontScale: 2 });
+        expect(fontPx(large.fillTexts[0].font)).toBeGreaterThan(fontPx(small.fillTexts[0].font));
+    });
+
+    it('applies the chosen text color', () => {
+        const { fillTexts } = drawWithStyle({ color: '#ff0000' });
+        expect(fillTexts[0].fillStyle).toBe('#ff0000');
+    });
+
+    it('draws a box background only for background=box', () => {
+        const box = drawWithStyle({ background: 'box' });
+        const none = drawWithStyle({ background: 'none' });
+        expect(box.calls.roundRect + box.calls.fillRect).toBeGreaterThan(0);
+        expect(none.calls.roundRect + none.calls.fillRect).toBe(0);
+    });
+
+    it('positions the caption higher for position=top than bottom', () => {
+        const top = drawWithStyle({ position: 'top' });
+        const bottom = drawWithStyle({ position: 'bottom' });
+        expect(top.fillTexts[0].y).toBeLessThan(bottom.fillTexts[0].y);
+    });
+});

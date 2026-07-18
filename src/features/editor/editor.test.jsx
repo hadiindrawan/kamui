@@ -52,7 +52,7 @@ describe('Editor', () => {
 
         // Wait for the loading state to finish
         await waitFor(() => {
-            expect(screen.getByText('Beunta Editor')).toBeInTheDocument();
+            expect(screen.getByText('Kamui Editor')).toBeInTheDocument();
             expect(screen.getByTestId('mock-canvas-player')).toBeInTheDocument();
             expect(screen.getByTestId('mock-timeline')).toBeInTheDocument();
         });
@@ -60,7 +60,7 @@ describe('Editor', () => {
 
     it('should surface the Save Changes button after using the trim "Set" shortcut buttons', async () => {
         render(<Editor />);
-        await waitFor(() => expect(screen.getByText('Beunta Editor')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Kamui Editor')).toBeInTheDocument());
 
         expect(screen.queryByTitle('Save timeline edits (Cmd+s)')).not.toBeInTheDocument();
 

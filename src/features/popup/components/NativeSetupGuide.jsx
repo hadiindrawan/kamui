@@ -32,9 +32,9 @@ export default function NativeSetupGuide({ isAvailable, onCheck, os, onDismiss }
 
     const isMac = os === 'darwin';
     const downloadUrl = isMac
-        ? 'https://github.com/beunta/beunta-native/releases/latest/download/beunta-native-macos.pkg'
-        : 'https://github.com/beunta/beunta-native/releases/latest/download/beunta-native-windows.msi';
-    const installerName = isMac ? 'beunta-native-macos.pkg' : 'beunta-native-windows.msi';
+        ? 'https://github.com/hadiindrawan/kamui-native/releases/latest/download/kamui-native-macos.pkg'
+        : 'https://github.com/hadiindrawan/kamui-native/releases/latest/download/kamui-native-windows.msi';
+    const installerName = isMac ? 'kamui-native-macos.pkg' : 'kamui-native-windows.msi';
 
     return (
         <div className="native-setup-guide">
@@ -92,7 +92,7 @@ export default function NativeSetupGuide({ isAvailable, onCheck, os, onDismiss }
                             <strong>Grant Permissions (macOS)</strong>
                             <p>
                                 Open <strong>System Settings → Privacy & Security → Accessibility</strong> and
-                                enable Beunta Native — this is what lets it see clicks outside the browser.
+                                enable Kamui Native — this is what lets it see clicks outside the browser.
                                 (Screen Recording permission is requested separately by Chrome when you start
                                 a recording; the helper app never touches pixels.)
                             </p>
@@ -135,7 +135,7 @@ export default function NativeSetupGuide({ isAvailable, onCheck, os, onDismiss }
                     Skip — use Browser recording mode
                 </button>
                 <a
-                    href="https://github.com/beunta/beunta-native#troubleshooting"
+                    href="https://github.com/hadiindrawan/kamui-native#troubleshooting"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="btn-help"

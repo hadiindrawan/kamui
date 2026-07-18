@@ -7,12 +7,12 @@
  */
 (() => {
     // Guard against double-injection.
-    if (window.__beuntaRegionSelectorActive) return;
-    window.__beuntaRegionSelectorActive = true;
+    if (window.__kamuiRegionSelectorActive) return;
+    window.__kamuiRegionSelectorActive = true;
 
     const ACCENT = '#5e6ad2';
     const overlay = document.createElement('div');
-    overlay.setAttribute('data-beunta-region', '');
+    overlay.setAttribute('data-kamui-region', '');
     Object.assign(overlay.style, {
         position: 'fixed', inset: '0', zIndex: '2147483647', cursor: 'crosshair',
         background: 'rgba(0,0,0,0.35)', userSelect: 'none',
@@ -52,7 +52,7 @@
     };
 
     const cleanup = () => {
-        window.__beuntaRegionSelectorActive = false;
+        window.__kamuiRegionSelectorActive = false;
         overlay.remove();
         hint.remove();
         window.removeEventListener('keydown', onKey, true);

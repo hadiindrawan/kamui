@@ -984,6 +984,10 @@ body {
     background: var(--warn);
 }
 
+.segment-rnd.segment-caption {
+    background: #7c5cff;
+}
+
 .segment-rnd:hover {
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
     transform: translateY(-1px);
@@ -2029,4 +2033,204 @@ body {
     background: var(--accent-hover);
     transform: translateY(-1px);
     box-shadow: var(--shadow-accent);
+}
+
+/* ── Captions panel ─────────────────────────────────────────────── */
+.captions-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.captions-toolbar-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.captions-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--ink-muted);
+    cursor: pointer;
+}
+
+.captions-toggle span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.captions-generate {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.captions-generate-btn {
+    width: 100%;
+    justify-content: center;
+}
+
+.captions-hint {
+    font-size: 11px;
+    color: var(--ink-subtle);
+    margin: 0;
+}
+
+.captions-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--ink-muted);
+    border-top: 1px solid var(--hairline);
+    padding-top: 10px;
+}
+
+.captions-list-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.captions-empty {
+    font-size: 12px;
+    color: var(--ink-subtle);
+    margin: 0;
+}
+
+.captions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+.caption-row {
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    padding: 8px;
+}
+
+.caption-row.editing {
+    border-color: var(--accent);
+}
+
+.caption-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.caption-time-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.caption-row-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.caption-icon-btn {
+    background: none;
+    border: none;
+    color: var(--ink-muted);
+    font-size: 11px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+}
+
+.caption-icon-btn:hover {
+    background: var(--surface-3);
+    color: var(--ink);
+}
+
+.caption-icon-btn.danger:hover {
+    color: var(--danger);
+}
+
+.caption-text-preview {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--ink);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.caption-edit {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.caption-text-input {
+    width: 100%;
+    resize: vertical;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    font-family: var(--font-family);
+    font-size: 12px;
+    padding: 6px;
+}
+
+.caption-time-inputs {
+    display: flex;
+    gap: 8px;
+}
+
+.caption-time-inputs label {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--ink-muted);
+}
+
+.caption-time-inputs input {
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 4px 6px;
+}
+
+.segments-track.caption-track .track-label {
+    color: #7c5cff;
+}
+
+.captions-style {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.caption-color-input {
+    width: 44px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    cursor: pointer;
 }

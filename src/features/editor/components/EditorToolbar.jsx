@@ -14,7 +14,7 @@ export default function EditorToolbar({
             <div className="header-left">
                 <h1 className="header-title">
                     <Film size={22} />
-                    Beunta Editor
+                    Kamui Editor
                 </h1>
                 <div className="header-info">
                     <span><Zap size={14} /> {segmentCount} segments</span>

@@ -1,5 +1,5 @@
 /**
- * Beunta design tokens — Linear-inspired dark system (see DESIGN.md).
+ * Kamui design tokens — Linear-inspired dark system (see DESIGN.md).
  *
  * Single source of truth for color, type, radius, and spacing. Consumed by
  * popup.css and editor.css. New code should use the semantic tokens

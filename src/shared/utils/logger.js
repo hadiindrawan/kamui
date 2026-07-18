@@ -1,12 +1,12 @@
 /**
- * Beunta Logger — structured logging for the Chrome extension.
+ * Kamui Logger — structured logging for the Chrome extension.
  *
  * Features:
  *  - Colour-coded, tagged console output  [SW] [Popup] [Widget] [Bridge] etc.
  *  - Timestamps on every line
  *  - Persists the last MAX_ENTRIES log lines to chrome.storage.session
  *    so you can retrieve them from any extension context or DevTools.
- *  - Exposes window.__beuntaLogs() / chrome.storage.session for cross-context reading
+ *  - Exposes window.__kamuiLogs() / chrome.storage.session for cross-context reading
  *
  * Usage:
  *   import { createLogger } from '../shared/utils/logger.js';
@@ -53,7 +53,7 @@ function _persist(entry) {
     // Write to chrome.storage.session if available (service worker / popup)
     try {
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
-            chrome.storage.session.set({ __beuntaLogs: _buffer }).catch(() => {});
+            chrome.storage.session.set({ __kamuiLogs: _buffer }).catch(() => {});
         }
     } catch { /* context may not support storage */ }
 }
@@ -101,7 +101,7 @@ export function createLogger(tag) {
 /**
  * Retrieve the in-memory log buffer (useful from DevTools console).
  * Also available from any context via:
- *   chrome.storage.session.get('__beuntaLogs', console.log)
+ *   chrome.storage.session.get('__kamuiLogs', console.log)
  */
 export function getLogs() {
     return [..._buffer];
@@ -109,7 +109,7 @@ export function getLogs() {
 
 /**
  * Print all buffered logs to the console in a readable table.
- * Call from DevTools: window.__beuntaLogs?.()
+ * Call from DevTools: window.__kamuiLogs?.()
  */
 export function printLogs() {
     console.table(_buffer.map(e => ({
@@ -122,6 +122,6 @@ export function printLogs() {
 
 // Expose on window for easy DevTools access (content/popup contexts)
 if (typeof window !== 'undefined') {
-    window.__beuntaLogs = printLogs;
-    window.__beuntaGetLogs = getLogs;
+    window.__kamuiLogs = printLogs;
+    window.__kamuiGetLogs = getLogs;
 }

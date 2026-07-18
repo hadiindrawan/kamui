@@ -9,5 +9,4 @@ yarn-error.log
 
 scripts/
 dist/
-public/ffmpeg
 *.mp4
