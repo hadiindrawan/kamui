@@ -15,6 +15,9 @@ const MIN_SEGMENT_DISTANCE_MS = 1000;
 // no longer fixed here — it's computed per codec/fps/quality-tier at export
 // time by selectExportCodec (see utils/export-codec.js).
 export const RESOLUTION_PRESETS = {
+    // 'source' keeps the recording's native resolution (no downscale) — the
+    // default, so a 4K capture exports at 4K instead of being reduced to 1080p.
+    'source': { resolution: 'source', label: 'Source (match recording)' },
     '2160': { resolution: 2160, label: '4K (2160p)' },
     '1080': { resolution: 1080, label: '1080p (Full HD)' },
     '720': { resolution: 720, label: '720p (HD)' },
@@ -114,7 +117,7 @@ export function useEditorState() {
     const [duration, setDuration] = useState(0);
     const [isExporting, setIsExporting] = useState(false);
     const [exportProgress, setExportProgress] = useState(0);
-    const [exportResolution, setExportResolution] = useState('1080');
+    const [exportResolution, setExportResolution] = useState('source');
     const [exportFps, setExportFps] = useState(DEFAULT_EXPORT_FPS);
     const [exportFormat, setExportFormat] = useState('mp4');
     const [conversionService, setConversionService] = useState('local');
@@ -643,6 +646,8 @@ export function useEditorState() {
                     segments, trimStart, trimEnd,
                     captions, burnInCaptions, captionStyle,
                     targetResolution: preset.resolution,
+                    // Capture frame rate, so export.js can cap fps to it.
+                    sourceFps: recording?.frameRate,
                     fps: merged.exportFps, format: merged.exportFormat,
                     exportQuality: merged.exportQuality || 'best',
                 },

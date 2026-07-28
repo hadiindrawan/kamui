@@ -23,12 +23,14 @@ const useExportEstimate = ({ format, exportResolution, fps, tier, aspectRatio, v
 
     useEffect(() => {
         let cancelled = false;
-        const resolution = Number(exportResolution) || 1080;
+        const resolution = exportResolution === 'source' ? 'source' : (Number(exportResolution) || 1080);
         const { width, height } = calculateCanvasSize(videoWidth || 1920, videoHeight || 1080, aspectRatio, resolution);
 
         (async () => {
             try {
-                const { attempts, warning } = await selectExportCodec({ format, width, height, resolution, fps, tier });
+                // Bitrate bucket keys off the actual output short edge, so a
+                // 'source' export is sized from real pixels, not the sentinel.
+                const { attempts, warning } = await selectExportCodec({ format, width, height, resolution: Math.min(width, height), fps, tier });
                 if (cancelled || !attempts.length) return;
                 const videoBitrate = attempts[0].bitrate;
                 const audioBitrate = computeAudioBitrate({ format, tier });
@@ -56,17 +58,23 @@ export default function ExportPanel({
     exportFormat, setExportFormat,
     conversionService, setConversionService,
     exportQuality, setExportQuality,
-    aspectRatio, videoWidth, videoHeight,
+    aspectRatio, videoWidth, videoHeight, sourceFps,
     duration, trimStart, trimEnd,
     onExport,
 }) {
-    const fpsIndex = FPS_STOPS.includes(exportFps) ? FPS_STOPS.indexOf(exportFps) : FPS_STOPS.indexOf(60);
+    // Encoding above the capture's frame rate only duplicates frames while
+    // thinning the bitrate per frame, so the slider stops at the source rate.
+    const maxFps = Number.isFinite(sourceFps) && sourceFps > 0 ? Math.round(sourceFps) : null;
+    const availableFps = maxFps ? FPS_STOPS.filter((f) => f <= maxFps) : FPS_STOPS;
+    const fpsStops = availableFps.length ? availableFps : [FPS_STOPS[0]];
+    const effectiveFps = Math.min(exportFps, fpsStops[fpsStops.length - 1]);
+    const fpsIndex = fpsStops.includes(effectiveFps) ? fpsStops.indexOf(effectiveFps) : fpsStops.indexOf(Math.min(60, fpsStops[fpsStops.length - 1]));
 
     const durationSec = Math.max(0, (trimEnd || duration || 0) - (trimStart || 0));
     const estimate = useExportEstimate({
         format: exportFormat,
         exportResolution,
-        fps: exportFps,
+        fps: effectiveFps,
         tier: exportQuality || 'best',
         aspectRatio,
         videoWidth,
@@ -141,22 +149,28 @@ export default function ExportPanel({
                             onChange={(e) => setExportResolution(e.target.value)}
                             title="Export resolution"
                         >
+                            <option value="source">Source (match recording)</option>
                             <option value="2160">4K (2160p)</option>
                             <option value="1080">1080p (Full HD)</option>
                             <option value="720">720p (HD)</option>
                         </select>
-                        <div className="fps-slider-group" title="Export frame rate">
+                        <div
+                            className="fps-slider-group"
+                            title={maxFps
+                                ? `Export frame rate (source is ${maxFps}fps — higher only duplicates frames)`
+                                : 'Export frame rate'}
+                        >
                             <span className="fps-slider-label">
-                                {exportFps}fps{exportFps >= 120 ? ' (slower)' : ''}
+                                {effectiveFps}fps{effectiveFps >= 120 ? ' (slower)' : ''}
                             </span>
                             <input
                                 type="range"
                                 className="fps-slider"
                                 min="0"
-                                max={FPS_STOPS.length - 1}
+                                max={fpsStops.length - 1}
                                 step="1"
                                 value={fpsIndex}
-                                onChange={(e) => setExportFps(FPS_STOPS[parseInt(e.target.value, 10)])}
+                                onChange={(e) => setExportFps(fpsStops[parseInt(e.target.value, 10)])}
                             />
                         </div>
                         <select

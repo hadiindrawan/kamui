@@ -14,9 +14,9 @@ import {
 
 describe('bitrate model', () => {
     it('returns the table bitrate exactly at 60fps / best tier', () => {
-        expect(computeVideoBitrate({ codec: 'hevc', resolution: 2160, fps: 60, tier: 'best' })).toBe(8_000_000);
-        expect(computeVideoBitrate({ codec: 'avc', resolution: 1080, fps: 60, tier: 'best' })).toBe(5_000_000);
-        expect(computeVideoBitrate({ codec: 'vp9', resolution: 720, fps: 60, tier: 'best' })).toBe(1_600_000);
+        expect(computeVideoBitrate({ codec: 'hevc', resolution: 2160, fps: 60, tier: 'best' })).toBe(15_000_000);
+        expect(computeVideoBitrate({ codec: 'avc', resolution: 1080, fps: 60, tier: 'best' })).toBe(9_000_000);
+        expect(computeVideoBitrate({ codec: 'vp9', resolution: 720, fps: 60, tier: 'best' })).toBe(2_700_000);
     });
 
     it('accepts string resolution keys (as the UI passes them)', () => {
@@ -66,10 +66,27 @@ describe('bitrate model', () => {
 });
 
 describe('budget', () => {
-    it('4K@120 HEVC best (video + audio) fits the ~13.3 Mbps target', () => {
-        const video = computeVideoBitrate({ codec: 'hevc', resolution: 2160, fps: 120, tier: 'best' });
+    // Regression guard for the "blurry 4K export" bug: the bitrate model was
+    // once tuned down to fit 100MB/min, which put 4K at ~8 Mbps HEVC — about
+    // half the source recording's own bitrate, so the re-encode visibly lost
+    // detail. 'best' must stay at least as good as the pre-budget behaviour
+    // (mediabunny QUALITY_HIGH ≈ 22.4 Mbps AVC at 4K).
+    const OLD_QUALITY_HIGH_4K_AVC = 22_400_000;
+    const HEVC_EFFICIENCY = 0.6; // HEVC bitrate ≈ 0.6x AVC for equal quality
+
+    it('keeps 4K "best" at least as sharp as the pre-budget QUALITY_HIGH baseline', () => {
+        const hevc = computeVideoBitrate({ codec: 'hevc', resolution: 2160, fps: 60, tier: 'best' });
+        const avcEquivalent = hevc / HEVC_EFFICIENCY;
+        expect(avcEquivalent).toBeGreaterThanOrEqual(OLD_QUALITY_HIGH_4K_AVC);
+    });
+
+    it('does not cap "best" or "balanced" to the size budget (quality wins)', () => {
         const audio = computeAudioBitrate({ format: 'mp4', tier: 'best' });
-        expect(video + audio).toBeLessThanOrEqual(13_300_000);
+        for (const tier of ['best', 'balanced']) {
+            const video = computeVideoBitrate({ codec: 'avc', resolution: 2160, fps: 120, tier });
+            // Deliberately over the 100MB/min budget — that is the point.
+            expect(video + audio).toBeGreaterThan(budgetTotalBitrate());
+        }
     });
 
     it('capBitrateToBudget only lowers bitrates that exceed the budget', () => {
@@ -88,12 +105,12 @@ describe('budget', () => {
         expect(bytes).toBe(Math.round((8_192_000 / 8) * 60 * 1.01));
     });
 
-    it('a capped AVC 4K@120 export stays within the 100MB/min budget', async () => {
-        const probe = async (codec) => codec === 'avc'; // HEVC unavailable
+    it('the "smallest" tier still enforces the 100MB/min budget at 4K@120', async () => {
+        const probe = async () => true;
         const { attempts } = await selectExportCodec({
-            format: 'mp4', width: 3840, height: 2160, resolution: 2160, fps: 120, tier: 'best', probe,
+            format: 'mp4', width: 3840, height: 2160, resolution: 2160, fps: 120, tier: 'smallest', probe,
         });
-        const audio = computeAudioBitrate({ format: 'mp4', tier: 'best' });
+        const audio = computeAudioBitrate({ format: 'mp4', tier: 'smallest' });
         const estimated = estimateFileSizeBytes({ videoBitrate: attempts[0].bitrate, audioBitrate: audio, durationSec: 60 });
         expect(estimated).toBeLessThanOrEqual(SIZE_BUDGET_BYTES_PER_MIN);
     });
@@ -111,14 +128,24 @@ describe('selectExportCodec', () => {
         expect(warning).toBeNull();
     });
 
-    it('falls back to H.264 (capped) with a warning when HEVC fails at 4K@120', async () => {
+    it('falls back to H.264 at full quality (uncapped) when HEVC fails at 4K@120', async () => {
         const probe = async (codec) => codec === 'avc';
         const { attempts, warning } = await selectExportCodec({
             format: 'mp4', width: 3840, height: 2160, resolution: 2160, fps: 120, tier: 'best', probe,
         });
         expect(attempts.map((a) => a.codec)).toEqual(['avc']);
-        expect(attempts[0].capped).toBe(true);
+        // 'best' is never budget-capped — the old unconditional AVC cap is what
+        // made 4K H.264 fallbacks look blurry.
+        expect(attempts[0].capped).toBe(false);
         expect(warning).toMatch(/H\.264/);
+    });
+
+    it('caps the H.264 fallback only on the "smallest" tier', async () => {
+        const probe = async (codec) => codec === 'avc';
+        const { attempts, warning } = await selectExportCodec({
+            format: 'mp4', width: 3840, height: 2160, resolution: 2160, fps: 120, tier: 'smallest', probe,
+        });
+        expect(attempts[0].capped).toBe(true);
         expect(warning).toMatch(/capped/i);
     });
 

@@ -40,18 +40,27 @@ export function getAspectRatioValue(aspectRatio, fallback) {
 // baseline reaches the requested preset exactly (e.g. 2160 -> 4K). 'Native'
 // preserves the source's own aspect ratio and short edge, clamped so it never
 // upscales beyond the source's actual resolution.
+//
+// `targetResolution === 'source'` means "match the recording": it resolves to
+// the source's own short edge, so the export keeps the full captured
+// resolution (a 4K recording stays 4K) instead of being downscaled.
 export function calculateCanvasSize(videoW, videoH, aspectRatio, targetResolution = 1080) {
     let canvasW, canvasH;
 
+    // Resolve the "source" sentinel to the recording's native short edge.
+    const effectiveTarget = targetResolution === 'source'
+        ? Math.min(videoW, videoH)
+        : targetResolution;
+
     if (aspectRatio === 'Native') {
         const videoShortSide = Math.min(videoW, videoH);
-        const shortSide = Math.min(targetResolution, videoShortSide);
+        const shortSide = Math.min(effectiveTarget, videoShortSide);
         const scale = shortSide / videoShortSide;
         canvasW = videoW * scale;
         canvasH = videoH * scale;
     } else {
         const targetRatio = getAspectRatioValue(aspectRatio, videoW / videoH); // width/height
-        const scale = targetResolution / 1080;
+        const scale = effectiveTarget / 1080;
         if (targetRatio >= 1) {
             canvasH = 1080 * scale;
             canvasW = canvasH * targetRatio;

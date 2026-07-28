@@ -72,6 +72,36 @@ export async function exportVideo(recording, onProgress) {
     }, onProgress);
 }
 
+// Common capture/display rates. The measured packet rate of a variable-frame-rate
+// screen recording is noisy (getDisplayMedia only emits frames on change), so we
+// snap up to the nearest standard rate rather than trusting the raw average.
+const STANDARD_FPS = [24, 25, 30, 48, 50, 60, 90, 120, 144, 240];
+
+/**
+ * The source video's frame rate, used to cap the export frame rate.
+ *
+ * Prefers the rate recorded at capture time (`recording.frameRate`, read off the
+ * live MediaStreamTrack — authoritative). Falls back to measuring the packet
+ * rate over a bounded prefix of the file for older recordings saved before that
+ * metadata existed. Returns null when it can't be determined, in which case the
+ * caller leaves the requested fps alone.
+ */
+async function resolveSourceFps(videoTrack, recordedFps) {
+    if (Number.isFinite(recordedFps) && recordedFps > 0) return Math.round(recordedFps);
+    try {
+        const stats = await videoTrack.computePacketStats(120);
+        const measured = stats?.averagePacketRate;
+        if (!Number.isFinite(measured) || measured <= 0) return null;
+        // A VFR screen capture measures *below* its nominal rate, so snap up to
+        // the nearest standard rate; never cap the export below 30fps on a noisy
+        // measurement of a mostly-static recording.
+        const snapped = STANDARD_FPS.find((r) => measured <= r + 1);
+        return Math.max(30, snapped || Math.round(measured));
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Client-side MP4/WebM conversion using mediabunny. Both formats go through
  * this single pipeline: mediabunny is told a fixed `frameRate` so it pads/
@@ -147,6 +177,10 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
         canvas.width = canvasW; canvas.height = canvasH;
     }
     const ctx = canvas.getContext('2d', { alpha: false });
+    // The compositor rescales the video on almost every frame (target resolution,
+    // inset padding, camera zoom). Canvas defaults to 'low' resampling, which
+    // visibly softens small text; 'high' costs little next to encoding.
+    ctx.imageSmoothingQuality = 'high';
 
     // Pre-render background once at layout (native) resolution; the per-frame
     // scale transform upscales it along with everything else.
@@ -165,7 +199,12 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
     const scaleX = canvasW / model.layout.width;
     const scaleY = canvasH / model.layout.height;
 
-    const fps = settings.fps || 60;
+    // Never encode above the source's own frame rate. Asking for 120fps from a
+    // 60fps capture just duplicates every frame while the same bitrate is spread
+    // across twice as many frames — strictly less detail per frame for no gain.
+    const requestedFps = settings.fps || 60;
+    const sourceFps = await resolveSourceFps(videoTrack, settings.sourceFps);
+    const fps = sourceFps ? Math.min(requestedFps, sourceFps) : requestedFps;
     const frameDurationMs = 1000 / fps;
 
     const tier = settings.exportQuality || 'best';
@@ -181,7 +220,10 @@ async function runLocalConversion({ recording, settings, backgroundImage, onProg
             format: isWebM ? 'webm' : 'mp4',
             width: canvasW,
             height: canvasH,
-            resolution: targetResolution,
+            // Bitrate bucket keys off the actual output short edge — targetResolution
+            // may be the 'source' sentinel, which calculateCanvasSize already resolved
+            // into canvasW/canvasH.
+            resolution: Math.min(canvasW, canvasH),
             fps,
             tier,
         });

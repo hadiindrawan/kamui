@@ -478,6 +478,7 @@ function EditorContent() {
                 aspectRatio={aspectRatio}
                 videoWidth={recording?.resolution?.width}
                 videoHeight={recording?.resolution?.height}
+                sourceFps={recording?.frameRate}
                 duration={duration}
                 trimStart={trimStart}
                 trimEnd={trimEnd}

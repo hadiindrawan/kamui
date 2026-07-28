@@ -120,6 +120,19 @@ const CanvasPlayer = forwardRef(({
         videoRefs.current.forEach(v => { if (v) { v.muted = isMuted; v.volume = volume; } });
     }, [isMuted, volume]);
 
+    // Recompute the HiDPI preview buffer when the container resizes (editor
+    // window/sidebar changes). The rAF loop is idle while paused, so a one-shot
+    // re-render keeps the preview crisp without spinning the loop.
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(() => {
+            renderFrameRef.current?.();
+        });
+        observer.observe(container);
+        return () => observer.disconnect();
+    }, []);
+
     // Load background image when needed
     useEffect(() => {
         if (backgroundMode === 'image' && backgroundValue) {
@@ -420,6 +433,9 @@ const CanvasPlayer = forwardRef(({
         if (!canvas || !video || !video.videoWidth || !model || !backgroundBuffer) return;
 
         const ctx = canvas.getContext('2d', { alpha: false });
+        // Match the export compositor: 'high' resampling keeps small text sharp
+        // when the video is scaled (padding, camera zoom, HiDPI upscale).
+        ctx.imageSmoothingQuality = 'high';
 
         // Prop time when paused (instant scrub feedback); media time when playing.
         const timeToRender = isPlaying ? video.currentTime : currentTime;
@@ -490,9 +506,33 @@ const CanvasPlayer = forwardRef(({
         }
         lastLayoutRef.current = layout;
 
-        if (canvas.width !== layout.width || canvas.height !== layout.height) {
-            canvas.width = layout.width;
-            canvas.height = layout.height;
+        // HiDPI preview: render the scene into a buffer sized to the pixels
+        // actually shown on screen (displayed CSS size × devicePixelRatio),
+        // capped by the source resolution so we never upscale past real detail
+        // and never drop below the layout baseline. The whole scene is drawn in
+        // layout coordinates and scaled up uniformly below, so camera/overlay
+        // math is unchanged and the shared compositor stays the single draw path
+        // (mirrors the export scaleX/scaleY path in utils/export.js).
+        const layoutShort = Math.min(layout.width, layout.height);
+        const sourceShort = Math.min(video.videoWidth, video.videoHeight);
+        let previewScale = 1;
+        const container = containerRef.current;
+        if (container && layoutShort > 0) {
+            const box = container.getBoundingClientRect();
+            const aspect = layout.width / layout.height;
+            const displayW = Math.min(box.width, box.height * aspect);
+            const displayShort = Math.min(displayW, displayW / aspect);
+            const dpr = window.devicePixelRatio || 1;
+            const desired = (displayShort * dpr) / layoutShort;
+            const sourceCap = sourceShort > 0 ? sourceShort / layoutShort : Infinity;
+            previewScale = Math.max(1, Math.min(desired, sourceCap));
+        }
+
+        const bufferW = Math.round(layout.width * previewScale);
+        const bufferH = Math.round(layout.height * previewScale);
+        if (canvas.width !== bufferW || canvas.height !== bufferH) {
+            canvas.width = bufferW;
+            canvas.height = bufferH;
         }
 
         // Resolve the camera against the drawn geometry, and ease the global
@@ -515,6 +555,10 @@ const CanvasPlayer = forwardRef(({
         lastCameraRef.current = camera;
         lastCameraTsRef.current = nowTs;
 
+        // Scale the layout-space draw up to the HiDPI buffer (identity when
+        // previewScale === 1). drawSceneFrame manages its own save/restore.
+        ctx.save();
+        ctx.scale(previewScale, previewScale);
         drawSceneFrame(ctx, video, currentTimeMs, model, {
             layout,
             camera,
@@ -530,6 +574,7 @@ const CanvasPlayer = forwardRef(({
             showCaptions,
             captionStyle,
         });
+        ctx.restore();
     }
 
     // Keep the ref pointing at the freshest renderFrame closure every render.

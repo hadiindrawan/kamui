@@ -41,4 +41,26 @@ describe('calculateCanvasSize', () => {
     it('floors dimensions to even numbers (required by most video codecs)', () => {
         expect(calculateCanvasSize(641, 361, 'Native', 1080)).toEqual({ width: 640, height: 360 });
     });
+
+    describe("'source' resolution (match recording)", () => {
+        it('keeps a 4K 16:9 recording at its full resolution', () => {
+            // The regression this fixes: a 4K capture must not be downscaled to
+            // 1080p by default. 'source' resolves to the source short edge (2160).
+            expect(calculateCanvasSize(3840, 2160, '16:9', 'source')).toEqual({ width: 3840, height: 2160 });
+        });
+
+        it('is a no-op passthrough for Native (full source dimensions)', () => {
+            expect(calculateCanvasSize(2992, 1870, 'Native', 'source')).toEqual({ width: 2992, height: 1870 });
+        });
+
+        it('reframes a preset to the source-class short edge', () => {
+            // 4K source, reframed to vertical 9:16 at source-class resolution:
+            // short edge = 2160, so height scales to 2160 * (16/9)-tall canvas.
+            expect(calculateCanvasSize(3840, 2160, '9:16', 'source')).toEqual({ width: 2160, height: 3840 });
+        });
+
+        it('keeps a 1080p recording at 1080p (no upscaling)', () => {
+            expect(calculateCanvasSize(1920, 1080, '16:9', 'source')).toEqual({ width: 1920, height: 1080 });
+        });
+    });
 });

@@ -197,17 +197,24 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
 
         let selectedMimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type));
 
-        // 4. IMPROVED: Ultra-lightweight bitrate for Performance mode
-        // High Quality: 15 Mbps for crystal clear 4K/1080p
-        // Performance: 3 Mbps (720p) for smallest possible file size and fastest editor handling
-        const bitrate = quality === 'best-performance' ? 3 * 1000 * 1000 : 15 * 1000 * 1000;
+        // 4. Bitrate scales with the *actual* capture size for Best Quality.
+        // This recording is the hard quality ceiling for every later export, so
+        // a flat rate under-served large captures: 15 Mbps at 4K is ~half what
+        // crisp screen text needs, and the editor's re-encode could only lose
+        // more from there. Performance mode stays deliberately tiny.
+        const recordedSettings = videoTrack.getSettings?.() || {};
+        const capturePixels = (regionCropPx?.width || recordedSettings.width || 1920)
+            * (regionCropPx?.height || recordedSettings.height || 1080);
+        const bitrate = isPerformance
+            ? 3 * 1000 * 1000
+            : videoBitrateForPixels(capturePixels);
 
         const options = {
             mimeType: selectedMimeType || 'video/webm',
             videoBitsPerSecond: bitrate
         };
 
-        console.log(`Starting Recorder with: ${options.mimeType} at ${(bitrate / 1000000).toFixed(1)} Mbps (${quality})`);
+        console.log(`Starting Recorder with: ${options.mimeType} at ${(bitrate / 1000000).toFixed(1)} Mbps (${quality}), capture ${recordedSettings.width}x${recordedSettings.height}@${recordedSettings.frameRate}fps`);
 
         mediaRecorder = new MediaRecorder(finalStream, options);
 
@@ -260,6 +267,26 @@ async function startRecording(sessionId, tabId, micEnabled = false, quality = 'b
         console.error('Recording Start Failed:', error);
         throw error;
     }
+}
+
+/**
+ * VP9 capture bitrate for a given pixel count, for the Best Quality mode.
+ *
+ * Anchored at the previous flat rate for 1080p (15 Mbps — so no existing case
+ * regresses) and scaled with the square root of the pixel ratio, which roughly
+ * doubles it to ~30 Mbps at 4K. The old flat 15 Mbps left a 4K capture at about
+ * half the bitrate crisp screen text needs, and since this recording is the hard
+ * ceiling for every later export, the editor's re-encode could only lose more
+ * from there. Screen content is mostly static, so real files stay well under the
+ * nominal rate. The old flat rate is the floor, so this change can only ever
+ * raise quality (never regresses sub-1080p captures), and it's capped so huge
+ * ones (5K/6K) stay sane on disk.
+ */
+function videoBitrateForPixels(pixels) {
+    const referencePixels = 1920 * 1080;
+    const referenceBitrate = 15 * 1000 * 1000;
+    const scaled = referenceBitrate * Math.sqrt((pixels || referencePixels) / referencePixels);
+    return Math.round(Math.min(40 * 1000 * 1000, Math.max(referenceBitrate, scaled)));
 }
 
 /**
@@ -474,10 +501,18 @@ async function saveRecordingData() {
                 ? { width: captureSettings.width, height: captureSettings.height }
                 : (existing?.resolution || { width: 1920, height: 1080 }));
 
+        // The capture's real frame rate. Stored so the editor can stop offering
+        // export frame rates above it — encoding a 60fps source at 120fps only
+        // duplicates frames while spreading the bitrate thinner per frame.
+        const frameRate = Number.isFinite(captureSettings?.frameRate)
+            ? Math.round(captureSettings.frameRate)
+            : (existing?.frameRate || null);
+
         await updateRecording(currentSessionId, {
             status: 'completed',
             duration: newDuration,
             resolution,
+            frameRate,
             sourceCrop: regionCrop || existing?.sourceCrop || null,
             mimeType: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'video/webm',
             thumbnail: currentThumbnail || (existing ? existing.thumbnail : null)

@@ -16,16 +16,26 @@
 // ratios at the same preset have equal-or-fewer pixels, so these are safe
 // upper bounds. HEVC and VP9 share numbers (~0.6 the AVC bitrate for equal
 // quality on screen content); AVC needs ~1.75x.
+//
+// These target a *visually transparent* re-encode of a screen recording: the
+// capture itself is stored at a comparable bitrate (see recorder.js), so
+// exporting materially below these numbers throws away detail the source
+// actually has and shows up as mushy text. An earlier revision of this table
+// was tuned to fit a 100MB/min budget (4K hevc was 8 Mbps ≈ 13 Mbps
+// AVC-equivalent, roughly half the source) which made 4K exports visibly
+// blurrier than the pre-budget behaviour (mediabunny QUALITY_HIGH ≈ 22 Mbps
+// AVC at 4K). Quality wins over the size target now; the tiers below and the
+// 'smallest' budget cap are how users opt into smaller files.
 export const BASE_VIDEO_BITRATES_60FPS = {
-    2160: { hevc: 8_000_000, avc: 14_000_000, vp9: 8_000_000 },
-    1080: { hevc: 2_800_000, avc: 5_000_000, vp9: 2_800_000 },
-    720: { hevc: 1_600_000, avc: 2_800_000, vp9: 1_600_000 },
+    2160: { hevc: 15_000_000, avc: 25_000_000, vp9: 15_000_000 },
+    1080: { hevc: 5_500_000, avc: 9_000_000, vp9: 5_500_000 },
+    720: { hevc: 2_700_000, avc: 4_500_000, vp9: 2_700_000 },
 };
 
 export const QUALITY_TIERS = {
     best: { label: 'Best quality', videoFactor: 1.0 },
-    balanced: { label: 'Balanced', videoFactor: 0.62 },
-    smallest: { label: 'Smallest file', videoFactor: 0.38 },
+    balanced: { label: 'Balanced', videoFactor: 0.7 },
+    smallest: { label: 'Smallest file', videoFactor: 0.45 },
 };
 
 // Audio bitrates (bps) by container codec × tier.
@@ -38,8 +48,14 @@ export const AUDIO_BITRATES = {
 // AVC budget cap, so they stay consistent.
 export const SIZE_OVERHEAD = 1.01;
 
-// 100MB per minute target.
+// 100MB per minute target. This is only *enforced* on the 'smallest' tier —
+// for 'best'/'balanced' it stays advisory (used for the post-export size
+// readout/warning), because capping 4K to this budget is what made exports
+// blurry. See BASE_VIDEO_BITRATES_60FPS.
 export const SIZE_BUDGET_BYTES_PER_MIN = 100 * 1024 * 1024;
+
+// Tiers whose bitrate is hard-capped to SIZE_BUDGET_BYTES_PER_MIN.
+export const BUDGET_ENFORCED_TIERS = new Set(['smallest']);
 
 // fps scaling: at 120fps the source screen recording's duplicated content
 // frames (getDisplayMedia only emits ~60fps of real frames) compress to almost
@@ -49,9 +65,21 @@ export const SIZE_BUDGET_BYTES_PER_MIN = 100 * 1024 * 1024;
 export const scaleBitrateForFps = (baseBitrate, fps) =>
     Math.round(baseBitrate * Math.pow((fps || 60) / 60, 0.6));
 
+// Snap an arbitrary output short-edge (e.g. a "source" export at 1440 or 2160,
+// or a non-preset capture size) up to the smallest bitrate bucket that covers
+// it, so source-resolution exports never get under-budgeted. Non-numeric or
+// missing values fall back to 1080.
+export const bucketForResolution = (resolution) => {
+    const n = Number(resolution);
+    if (!Number.isFinite(n)) return 1080;
+    if (n <= 720) return 720;
+    if (n <= 1080) return 1080;
+    return 2160;
+};
+
 // Uncapped model bitrate for a codec at a resolution/fps/tier. Pure.
 export const computeVideoBitrate = ({ codec, resolution, fps, tier = 'best' }) => {
-    const row = BASE_VIDEO_BITRATES_60FPS[resolution] || BASE_VIDEO_BITRATES_60FPS[1080];
+    const row = BASE_VIDEO_BITRATES_60FPS[bucketForResolution(resolution)] || BASE_VIDEO_BITRATES_60FPS[1080];
     const base = row[codec] ?? row.avc;
     const videoFactor = (QUALITY_TIERS[tier] || QUALITY_TIERS.best).videoFactor;
     return scaleBitrateForFps(Math.round(base * videoFactor), fps);
@@ -123,7 +151,10 @@ export const selectExportCodec = async ({
     for (const codec of candidates) {
         let bitrate = computeVideoBitrate({ codec, resolution, fps, tier });
         let capped = false;
-        if (codec === 'avc') {
+        // Only the 'smallest' tier trades quality for the size budget. 'best'
+        // and 'balanced' keep their full model bitrate on every codec —
+        // capping AVC here unconditionally is what made 4K exports blurry.
+        if (BUDGET_ENFORCED_TIERS.has(tier)) {
             const cappedBitrate = capBitrateToBudget(bitrate, audioBitrate);
             capped = cappedBitrate < bitrate;
             bitrate = cappedBitrate;
